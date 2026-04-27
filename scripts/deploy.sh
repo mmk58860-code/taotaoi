@@ -31,7 +31,7 @@ run_as_app_user() {
   elif command -v su >/dev/null 2>&1; then
     su -s /bin/bash "$APP_USER" -c "$(printf '%q ' "$@")"
   else
-    echo "Cannot switch to app user $APP_USER" >&2
+    echo "无法切换到应用用户 $APP_USER" >&2
     exit 1
   fi
 }
@@ -57,23 +57,23 @@ fi
 
 if [[ -t 0 ]]; then
   # 交互模式下，允许用户现场设置端口和总管理员信息。
-  read -r -p "Web port [${PORT}]: " input_port || true
+  read -r -p "网页端口 [${PORT}]: " input_port || true
   if [[ -n "${input_port:-}" ]]; then
     PORT="$input_port"
   fi
 
-  read -r -p "Admin username [${ADMIN_USERNAME}]: " input_admin_username || true
+  read -r -p "总管理员账号 [${ADMIN_USERNAME}]: " input_admin_username || true
   if [[ -n "${input_admin_username:-}" ]]; then
     ADMIN_USERNAME="$input_admin_username"
   fi
 
-  read -r -s -p "Admin password [hidden]: " input_admin_password || true
+  read -r -s -p "总管理员密码 [输入时隐藏]: " input_admin_password || true
   echo
   if [[ -n "${input_admin_password:-}" ]]; then
     ADMIN_PASSWORD="$input_admin_password"
   fi
 
-  read -r -p "Secret key [auto-generate if blank]: " input_secret_key || true
+  read -r -p "会话密钥 SECRET_KEY [留空则自动生成]: " input_secret_key || true
   if [[ -n "${input_secret_key:-}" ]]; then
     SECRET_KEY="$input_secret_key"
   elif [[ "$SECRET_KEY" == "change-me" ]]; then
@@ -130,6 +130,6 @@ run_privileged systemctl enable tao-monitor.service
 run_privileged systemctl restart tao-monitor.service
 run_privileged systemctl status tao-monitor.service --no-pager
 echo
-echo "TAO Monitor deployed."
-echo "Web URL: http://$(hostname -I | awk '{print $1}'):${PORT}"
-echo "Admin username: ${ADMIN_USERNAME}"
+echo "TAO Monitor 部署完成。"
+echo "网页地址: http://$(hostname -I | awk '{print $1}'):${PORT}"
+echo "总管理员账号: ${ADMIN_USERNAME}"
