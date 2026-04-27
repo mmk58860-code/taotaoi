@@ -99,7 +99,7 @@ def run_startup_migrations(superadmin_user_id: int) -> None:
                 or not _has_index(connection, "chain_events", "uq_menu_block_event")
             ):
                 _rebuild_chain_events(connection, superadmin_user_id)
-                event_columns = {column["name"] for column in inspect(engine).get_columns("chain_events")}
+                event_columns = _get_sqlite_columns(connection, "chain_events")
             _ensure_sqlite_column(
                 connection,
                 table_name="chain_events",
@@ -171,6 +171,14 @@ def _ensure_sqlite_column(connection, table_name: str, existing_columns: set[str
         return
     connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"))
     existing_columns.add(column_name)
+
+
+def _get_sqlite_columns(connection, table_name: str) -> set[str]:
+    # 在同一连接上读取表结构，避免 SQLite 迁移事务里再次开连接造成锁冲突。
+    return {
+        row["name"]
+        for row in connection.execute(text(f"PRAGMA table_info('{table_name}')")).mappings().all()
+    }
 
 
 def _ensure_index(connection, table_name: str, index_name: str, create_sql: str) -> None:
