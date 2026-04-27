@@ -60,7 +60,7 @@ sudo apt install -y python3 python3-venv python3-pip git rsync zip
 3. 克隆项目并部署：
 
 ```bash
-git clone <your-github-repo> /opt/tao-monitor
+git clone https://github.com/mmk58860-code/taotaoi.git /opt/tao-monitor
 cd /opt/tao-monitor
 chmod +x scripts/*.sh
 ./scripts/deploy.sh
@@ -150,7 +150,7 @@ git init
 git add .
 git commit -m "feat: bootstrap tao monitor"
 git branch -M main
-git remote add origin <your-github-repo>
+git remote add origin https://github.com/mmk58860-code/taotaoi.git
 git push -u origin main
 ```
 
