@@ -54,6 +54,8 @@ sudo apt update
 sudo apt install -y python3 python3-venv python3-pip git rsync
 ```
 
+如果你是直接用 `root` 登录服务器，没有 `sudo` 也可以，命令里的 `sudo` 去掉即可。
+
 3. 克隆项目并部署：
 
 ```bash
@@ -122,6 +124,7 @@ git push -u origin main
 - 网页后台登录密码来自 `ADMIN_PASSWORD`。
 - 首次部署创建的是总管理员账号。
 - 总管理员登录后台后，可以继续创建普通后台账号给朋友使用。
+- 依赖里包含 `itsdangerous` 和 `python-multipart`，避免登录和表单页面启动失败。
 
 ## 首次安装时可自定义
 

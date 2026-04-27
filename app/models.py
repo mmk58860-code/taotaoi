@@ -6,6 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
 
+# 钱包监控表：保存需要跟踪的钱包地址和别名。
 class WalletWatch(Base):
     __tablename__ = "wallet_watches"
 
@@ -16,6 +17,7 @@ class WalletWatch(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+# 链上命中事件表：保存被监控到的交易事件。
 class ChainEvent(Base):
     __tablename__ = "chain_events"
     __table_args__ = (UniqueConstraint("block_number", "event_index", name="uq_block_event"),)
@@ -35,6 +37,7 @@ class ChainEvent(Base):
     detected_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+# 监听状态表：只保存一行，用于记录扫描进度和错误信息。
 class MonitorState(Base):
     __tablename__ = "monitor_state"
 
@@ -46,6 +49,7 @@ class MonitorState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# 动态设置表：网页里改过的配置会存进这里。
 class AppSetting(Base):
     __tablename__ = "app_settings"
 
@@ -53,6 +57,7 @@ class AppSetting(Base):
     value: Mapped[str] = mapped_column(Text)
 
 
+# 后台账号表：总管理员和普通账号都存这里。
 class AdminUser(Base):
     __tablename__ = "admin_users"
 

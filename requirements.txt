@@ -7,4 +7,5 @@ jinja2==3.1.6
 httpx==0.28.1
 python-dotenv==1.1.1
 substrate-interface==1.7.11
-
+itsdangerous==2.2.0
+python-multipart==0.0.20

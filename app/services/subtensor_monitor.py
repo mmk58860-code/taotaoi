@@ -18,6 +18,7 @@ from app.services.telegram import TelegramNotifier
 
 
 logger = logging.getLogger(__name__)
+# TAO 与 Rao 的换算常量。
 RAO_PER_TAO = 1_000_000_000
 
 
@@ -38,18 +39,21 @@ class TransferRecord:
 
 class SubtensorMonitor:
     def __init__(self) -> None:
+        # 监听任务会在 FastAPI 生命周期内启动和关闭。
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._wakeup_event = asyncio.Event()
         self._notifier = TelegramNotifier()
 
     async def start(self) -> None:
+        # 避免重复创建监听任务。
         if self._task and not self._task.done():
             return
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run(), name="subtensor-monitor")
 
     async def stop(self) -> None:
+        # 优雅停止后台扫描任务。
         self._stop_event.set()
         self._wakeup_event.set()
         if self._task:
@@ -58,9 +62,11 @@ class SubtensorMonitor:
                 await self._task
 
     async def restart(self) -> None:
+        # 不直接重建任务，只是唤醒当前循环，让新配置尽快生效。
         self._wakeup_event.set()
 
     async def _run(self) -> None:
+        # 后台常驻循环：扫描链、记录错误、按配置间隔休眠。
         while not self._stop_event.is_set():
             try:
                 await self._scan_once()
@@ -82,12 +88,14 @@ class SubtensorMonitor:
             self._wakeup_event.clear()
 
     def _current_poll_interval(self) -> int:
+        # 每一轮都重新读取数据库设置，网页保存后即可生效。
         with session_scope() as session:
             raw = get_runtime_settings(session)
         settings = typed_runtime_settings(raw)
         return int(settings["poll_interval_seconds"])
 
     async def _scan_once(self) -> None:
+        # 单轮扫描：读取监听配置，获取最新 finalized 区块，再逐块解析。
         with session_scope() as session:
             raw_settings = get_runtime_settings(session)
             typed = typed_runtime_settings(raw_settings)
@@ -129,6 +137,7 @@ class SubtensorMonitor:
         threshold_tao: float,
         watch_map: dict[str, str],
     ) -> list[TransferRecord]:
+        # 这里只筛选 Balances.Transfer，既支持钱包命中，也支持大额阈值命中。
         block_hash = substrate.get_block_hash(block_number)
         events = substrate.get_events(block_hash=block_hash)
         block = substrate.get_block(block_hash=block_hash)
@@ -158,16 +167,16 @@ class SubtensorMonitor:
             extrinsic_hash = self._resolve_extrinsic_hash(extrinsics, event_meta)
             tags = []
             if watched:
-                tags.append(f"wallet: {', '.join(watch_aliases)}")
+                tags.append(f"监控钱包: {', '.join(watch_aliases)}")
             if above_threshold:
-                tags.append(f"threshold: >= {threshold_tao} TAO")
+                tags.append(f"阈值命中: >= {threshold_tao} TAO")
             message = (
                 f"<b>{pallet}.{event_name}</b>\n"
-                f"Block: <code>{block_number}</code>\n"
-                f"Amount: <b>{amount_tao:.6f} TAO</b>\n"
-                f"From: <code>{from_address or '-'}</code>\n"
-                f"To: <code>{to_address or '-'}</code>\n"
-                f"Reason: {', '.join(tags)}"
+                f"区块: <code>{block_number}</code>\n"
+                f"金额: <b>{amount_tao:.6f} TAO</b>\n"
+                f"转出: <code>{from_address or '-'}</code>\n"
+                f"转入: <code>{to_address or '-'}</code>\n"
+                f"原因: {', '.join(tags)}"
             )
             results.append(
                 TransferRecord(
@@ -188,6 +197,7 @@ class SubtensorMonitor:
         return results
 
     async def _persist_and_notify(self, transfers: list[TransferRecord], settings: dict[str, str | float | int]) -> None:
+        # 先入库去重，再按需推送 Telegram，避免重复提醒。
         if not transfers:
             return
         for transfer in transfers:
@@ -236,6 +246,7 @@ class SubtensorMonitor:
                             stored.notification_sent = True
 
     def _parse_transfer_attributes(self, attributes: Any) -> tuple[str | None, str | None, int | None]:
+        # 兼容不同节点返回格式：有的给 dict，有的给 list。
         if isinstance(attributes, dict):
             from_address = attributes.get("from") or attributes.get("who")
             to_address = attributes.get("to") or attributes.get("dest")
@@ -255,6 +266,7 @@ class SubtensorMonitor:
         )
 
     def _resolve_extrinsic_hash(self, extrinsics: list[Any], event_meta: dict[str, Any]) -> str | None:
+        # 通过 phase 里的 ApplyExtrinsic 定位对应交易哈希。
         phase = event_meta.get("phase")
         if isinstance(phase, dict):
             extrinsic_idx = phase.get("ApplyExtrinsic")
@@ -274,6 +286,7 @@ class SubtensorMonitor:
         return getattr(extrinsic, "extrinsic_hash", None)
 
     def _pick_string(self, payload: dict[str, Any], keys: tuple[str, ...]) -> str:
+        # 某些字段名在不同链版本里会变化，这里按候选顺序取值。
         for key in keys:
             value = payload.get(key)
             if value is not None:
@@ -281,6 +294,7 @@ class SubtensorMonitor:
         return ""
 
     def _to_dict(self, value: Any) -> dict[str, Any]:
+        # 尽量把第三方对象转换成普通字典，便于后续统一解析。
         if isinstance(value, dict):
             return value
         if hasattr(value, "to_dict"):
@@ -292,6 +306,7 @@ class SubtensorMonitor:
         return {"value": str(value)}
 
     def _value_of(self, item: Any) -> Any:
+        # attributes 内部元素结构不固定，这里做一次浅展开。
         if isinstance(item, dict):
             for key in ("value", "account_id", "address"):
                 if key in item:
@@ -301,6 +316,7 @@ class SubtensorMonitor:
         return item
 
     def _to_int(self, value: Any) -> int | None:
+        # 链上金额既可能是整数，也可能是纯数字字符串。
         if value is None:
             return None
         if isinstance(value, int):
@@ -313,10 +329,10 @@ class SubtensorMonitor:
 
 
 def ensure_state(session) -> MonitorState:
+    # 监听状态表只有一行，如果不存在就自动创建。
     state = session.get(MonitorState, 1)
     if state is None:
         state = MonitorState(id=1, monitor_status="idle", last_scanned_block=0, last_seen_head=0)
         session.add(state)
         session.flush()
     return state
-

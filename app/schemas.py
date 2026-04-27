@@ -3,11 +3,13 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+# 新增钱包时的表单结构。
 class WalletCreate(BaseModel):
     address: str = Field(min_length=3, max_length=128)
     alias: str = Field(min_length=1, max_length=128)
 
 
+# 网页保存运行设置时的表单结构。
 class SettingsUpdate(BaseModel):
     subtensor_ws_url: str
     network_name: str
@@ -18,6 +20,7 @@ class SettingsUpdate(BaseModel):
     finality_lag_blocks: int = Field(ge=0, le=20)
 
 
+# 返回给模板或接口的钱包结构。
 class WalletOut(BaseModel):
     id: int
     address: str
@@ -28,6 +31,7 @@ class WalletOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# 返回给接口的事件结构。
 class ChainEventOut(BaseModel):
     id: int
     block_number: int
@@ -40,4 +44,3 @@ class ChainEventOut(BaseModel):
     detected_at: datetime
 
     model_config = {"from_attributes": True}
-

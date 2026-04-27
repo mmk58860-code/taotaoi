@@ -2,22 +2,22 @@
 {% block content %}
 <main class="login-shell">
   <section class="login-card">
-    <p class="eyebrow">TAO Monitor</p>
-    <h1 class="login-title">Enter Admin Password</h1>
-    <p class="lede">The monitor keeps running in the background. This login protects the web console.</p>
+    <p class="eyebrow">TAO 监控后台</p>
+    <h1 class="login-title">请输入后台账号密码</h1>
+    <p class="lede">监控服务会持续在后台运行，这个登录页只是用来保护你的网页管理入口。</p>
     {% if error %}
     <div class="banner error">{{ error }}</div>
     {% endif %}
     <form class="stack" method="post" action="/login">
       <label>
-        <span>Username</span>
-        <input name="username" type="text" placeholder="Enter ADMIN_USERNAME" required>
+        <span>用户名</span>
+        <input name="username" type="text" placeholder="请输入后台用户名" required>
       </label>
       <label>
-        <span>Password</span>
-        <input name="password" type="password" placeholder="Enter ADMIN_PASSWORD" required>
+        <span>密码</span>
+        <input name="password" type="password" placeholder="请输入后台密码" required>
       </label>
-      <button class="action" type="submit">Login</button>
+      <button class="action" type="submit">登录后台</button>
     </form>
   </section>
 </main>

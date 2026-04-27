@@ -7,48 +7,48 @@
 
   <section class="hero">
     <div>
-      <p class="eyebrow">TAO Ecosystem Watcher</p>
-      <h1>Blocks, wallets, and threshold alerts in one place.</h1>
-      <p class="lede">The service runs continuously, watches TAO chain transfer events, and pushes matching activity to Telegram.</p>
+      <p class="eyebrow">TAO 生态监控台</p>
+      <h1>区块、钱包、阈值交易，一处管理。</h1>
+      <p class="lede">服务会持续监听 TAO 链转账事件，把命中的大额交易和你关注的钱包动态及时推送到 Telegram。</p>
     </div>
     <div class="hero-actions">
       <form method="post" action="/monitor/restart">
-        <button class="action" type="submit">Reload Monitor</button>
+        <button class="action" type="submit">重新载入监听</button>
       </form>
       <form method="post" action="/logout">
-        <button class="ghost" type="submit">Logout</button>
+        <button class="ghost" type="submit">退出登录</button>
       </form>
     </div>
   </section>
 
   <section class="grid stats-grid">
     <article class="panel stat">
-      <span>Service</span>
+      <span>服务状态</span>
       <strong id="monitor-status">{{ state.monitor_status }}</strong>
-      <small>Last scanned block {{ state.last_scanned_block }}</small>
+      <small>最近扫描区块 {{ state.last_scanned_block }}</small>
     </article>
     <article class="panel stat">
-      <span>Latest Head</span>
+      <span>链上头部</span>
       <strong id="last-seen-head">{{ state.last_seen_head }}</strong>
       <small>finalized head</small>
     </article>
     <article class="panel stat">
-      <span>Wallets</span>
+      <span>监控钱包</span>
       <strong id="wallet-total">{{ wallets|length }}</strong>
-      <small id="wallet-active">Active {{ active_wallets }}</small>
+      <small id="wallet-active">启用中 {{ active_wallets }}</small>
     </article>
     <article class="panel stat">
-      <span>Matched Events</span>
+      <span>累计命中</span>
       <strong>{{ total_events }}</strong>
-      <small id="server-online">Server online</small>
+      <small id="server-online">服务器在线</small>
     </article>
   </section>
 
   <section class="grid main-grid">
     <article class="panel">
       <div class="panel-head">
-        <h2>Runtime Settings</h2>
-        <p>Changes take effect on the next scan loop.</p>
+        <h2>运行设置</h2>
+        <p>修改后会在下一轮扫描里立即生效。</p>
       </div>
       <form class="stack" method="post" action="/settings">
         <label>
@@ -56,15 +56,15 @@
           <input name="subtensor_ws_url" value="{{ settings['subtensor_ws_url'] }}" required>
         </label>
         <label>
-          <span>Network Name</span>
+          <span>网络名称</span>
           <input name="network_name" value="{{ settings['network_name'] }}" required>
         </label>
         <label>
-          <span>Large Transfer Threshold (TAO)</span>
+          <span>大额阈值（TAO）</span>
           <input name="large_transfer_threshold_tao" type="number" min="0" step="0.000001" value="{{ settings['large_transfer_threshold_tao'] }}" required>
         </label>
         <label>
-          <span>Poll Interval (seconds)</span>
+          <span>扫描间隔（秒）</span>
           <input name="poll_interval_seconds" type="number" min="2" max="120" value="{{ settings['poll_interval_seconds'] }}" required>
         </label>
         <label>
@@ -80,29 +80,29 @@
           <input name="telegram_chat_id" value="{{ settings['telegram_chat_id'] }}">
         </label>
         <div class="form-actions">
-          <button class="action" type="submit">Save Settings</button>
+          <button class="action" type="submit">保存设置</button>
         </div>
       </form>
       <form class="inline-form" method="post" action="/settings/test-telegram">
-        <button class="secondary" type="submit">Send Telegram Test</button>
+        <button class="secondary" type="submit">发送 Telegram 测试消息</button>
       </form>
     </article>
 
     <article class="panel">
       <div class="panel-head">
-        <h2>Wallet Monitor</h2>
-        <p>Add addresses, set aliases, and pause or resume them any time.</p>
+        <h2>钱包监控</h2>
+        <p>导入地址、设置别名，也可以随时暂停和恢复。</p>
       </div>
       <form class="stack" method="post" action="/wallets">
         <label>
-          <span>Wallet Address</span>
+          <span>钱包地址</span>
           <input name="address" placeholder="5..." required>
         </label>
         <label>
-          <span>Alias</span>
-          <input name="alias" placeholder="Foundation Hot Wallet" required>
+          <span>备注别名</span>
+          <input name="alias" placeholder="基金会热钱包" required>
         </label>
-        <button class="action" type="submit">Add Wallet</button>
+        <button class="action" type="submit">添加钱包</button>
       </form>
       <div class="wallet-list">
         {% for wallet in wallets %}
@@ -114,16 +114,16 @@
           <div class="wallet-actions">
             <form method="post" action="/wallets/{{ wallet.id }}/toggle">
               <button class="{{ 'secondary' if wallet.enabled else 'ghost' }}" type="submit">
-                {{ 'Pause' if wallet.enabled else 'Resume' }}
+                {{ '暂停监控' if wallet.enabled else '恢复监控' }}
               </button>
             </form>
             <form method="post" action="/wallets/{{ wallet.id }}/delete">
-              <button class="ghost" type="submit">Delete</button>
+              <button class="ghost" type="submit">删除</button>
             </form>
           </div>
         </div>
         {% else %}
-        <p class="muted">No wallets added yet.</p>
+        <p class="muted">还没有添加监控钱包。</p>
         {% endfor %}
       </div>
     </article>
@@ -132,21 +132,21 @@
   {% if current_is_superadmin %}
   <section class="panel">
     <div class="panel-head">
-      <h2>Account Management</h2>
-      <p>Signed in as {{ current_username }}. Create extra accounts for friends here.</p>
+      <h2>账号管理</h2>
+      <p>当前登录账号：{{ current_username }}。你可以在这里给朋友创建新的后台账号。</p>
     </div>
     <div class="grid admin-grid">
       <div>
         <form class="stack" method="post" action="/admin-users">
           <label>
-            <span>New Username</span>
+            <span>新账号用户名</span>
             <input name="username" placeholder="friend01" required>
           </label>
           <label>
-            <span>New Password</span>
-            <input name="password" type="password" placeholder="At least 6 characters" required>
+            <span>新账号密码</span>
+            <input name="password" type="password" placeholder="至少 6 个字符" required>
           </label>
-          <button class="action" type="submit">Create User</button>
+          <button class="action" type="submit">创建账号</button>
         </form>
       </div>
       <div class="wallet-list">
@@ -154,20 +154,20 @@
         <div class="wallet-row {{ 'wallet-disabled' if not admin_user.is_superadmin and admin_user.username == current_username else '' }}">
           <div>
             <strong>{{ admin_user.username }}</strong>
-            <p>{{ 'Superadmin' if admin_user.is_superadmin else 'Standard user' }}</p>
+            <p>{{ '总管理员' if admin_user.is_superadmin else '普通账号' }}</p>
           </div>
           <div class="wallet-actions">
             {% if not admin_user.is_superadmin %}
             <form method="post" action="/admin-users/{{ admin_user.id }}/delete">
-              <button class="ghost" type="submit">Delete User</button>
+              <button class="ghost" type="submit">删除账号</button>
             </form>
             {% else %}
-            <span class="role-pill">Protected</span>
+            <span class="role-pill">受保护</span>
             {% endif %}
           </div>
         </div>
         {% else %}
-        <p class="muted">No admin users yet.</p>
+        <p class="muted">还没有后台账号。</p>
         {% endfor %}
       </div>
     </div>
@@ -176,16 +176,16 @@
 
   <section class="panel log-panel">
     <div class="panel-head">
-      <h2>Recent Events</h2>
-      <p id="monitor-error">{{ state.last_error or "Monitor healthy" }}</p>
+      <h2>最近命中事件</h2>
+      <p id="monitor-error">{{ state.last_error or "监听正常" }}</p>
     </div>
     <div class="event-table">
       <div class="event-head">
-        <span>Block</span>
-        <span>Event</span>
-        <span>Amount</span>
-        <span>Addresses</span>
-        <span>Time</span>
+        <span>区块</span>
+        <span>事件</span>
+        <span>金额</span>
+        <span>地址</span>
+        <span>时间</span>
       </div>
       <div id="event-rows">
         {% for event in events %}
@@ -206,7 +206,7 @@
           <span>{{ event.detected_at.strftime("%Y-%m-%d %H:%M:%S") }}</span>
         </article>
         {% else %}
-        <p class="muted">No matched events yet.</p>
+        <p class="muted">还没有命中事件。</p>
         {% endfor %}
       </div>
     </div>
@@ -216,21 +216,21 @@
 <section class="modal-shell hidden" id="event-modal">
   <div class="modal-card">
     <div class="panel-head">
-      <h2 id="modal-title">Event Details</h2>
-      <button class="ghost modal-close" id="modal-close" type="button">Close</button>
+      <h2 id="modal-title">事件详情</h2>
+      <button class="ghost modal-close" id="modal-close" type="button">关闭</button>
     </div>
     <div class="detail-grid">
-      <div><span>Block</span><strong id="modal-block">-</strong></div>
-      <div><span>Amount</span><strong id="modal-amount">-</strong></div>
-      <div><span>Route</span><strong id="modal-route">-</strong></div>
-      <div><span>Time</span><strong id="modal-time">-</strong></div>
+      <div><span>区块</span><strong id="modal-block">-</strong></div>
+      <div><span>金额</span><strong id="modal-amount">-</strong></div>
+      <div><span>路径</span><strong id="modal-route">-</strong></div>
+      <div><span>时间</span><strong id="modal-time">-</strong></div>
     </div>
     <label class="detail-box">
-      <span>Message</span>
+      <span>推送内容</span>
       <textarea id="modal-message" rows="6" readonly></textarea>
     </label>
     <label class="detail-box">
-      <span>Raw Event</span>
+      <span>原始事件</span>
       <textarea id="modal-raw" rows="8" readonly></textarea>
     </label>
   </div>

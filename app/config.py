@@ -5,10 +5,12 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# 项目根目录，供数据库、模板、静态文件统一引用。
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
+    # 统一从 .env 读取运行配置，未知字段会被忽略，方便后续扩展。
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
@@ -30,6 +32,7 @@ class Settings(BaseSettings):
 
     @property
     def sqlite_path(self) -> Path | None:
+        # 如果当前数据库是 SQLite，就把连接串转换成真实文件路径。
         prefix = "sqlite:///"
         if self.database_url.startswith(prefix):
             return BASE_DIR / self.database_url.removeprefix(prefix)
@@ -38,4 +41,5 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    # 配置对象只实例化一次，避免每次请求重复读取环境变量。
     return Settings()
