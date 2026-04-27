@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% block content %}
+<main class="shell">
+  {% if notice %}
+  <section class="banner {{ level }}">{{ notice }}</section>
+  {% endif %}
+
+  <section class="hero">
+    <div>
+      <p class="eyebrow">TAO Ecosystem Watcher</p>
+      <h1>Blocks, wallets, and threshold alerts in one place.</h1>
+      <p class="lede">The service runs continuously, watches TAO chain transfer events, and pushes matching activity to Telegram.</p>
+    </div>
+    <div class="hero-actions">
+      <form method="post" action="/monitor/restart">
+        <button class="action" type="submit">Reload Monitor</button>
+      </form>
+      <form method="post" action="/logout">
+        <button class="ghost" type="submit">Logout</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="grid stats-grid">
+    <article class="panel stat">
+      <span>Service</span>
+      <strong id="monitor-status">{{ state.monitor_status }}</strong>
+      <small>Last scanned block {{ state.last_scanned_block }}</small>
+    </article>
+    <article class="panel stat">
+      <span>Latest Head</span>
+      <strong id="last-seen-head">{{ state.last_seen_head }}</strong>
+      <small>finalized head</small>
+    </article>
+    <article class="panel stat">
+      <span>Wallets</span>
+      <strong id="wallet-total">{{ wallets|length }}</strong>
+      <small id="wallet-active">Active {{ active_wallets }}</small>
+    </article>
+    <article class="panel stat">
+      <span>Matched Events</span>
+      <strong>{{ total_events }}</strong>
+      <small id="server-online">Server online</small>
+    </article>
+  </section>
+
+  <section class="grid main-grid">
+    <article class="panel">
+      <div class="panel-head">
+        <h2>Runtime Settings</h2>
+        <p>Changes take effect on the next scan loop.</p>
+      </div>
+      <form class="stack" method="post" action="/settings">
+        <label>
+          <span>Subtensor WS</span>
+          <input name="subtensor_ws_url" value="{{ settings['subtensor_ws_url'] }}" required>
+        </label>
+        <label>
+          <span>Network Name</span>
+          <input name="network_name" value="{{ settings['network_name'] }}" required>
+        </label>
+        <label>
+          <span>Large Transfer Threshold (TAO)</span>
+          <input name="large_transfer_threshold_tao" type="number" min="0" step="0.000001" value="{{ settings['large_transfer_threshold_tao'] }}" required>
+        </label>
+        <label>
+          <span>Poll Interval (seconds)</span>
+          <input name="poll_interval_seconds" type="number" min="2" max="120" value="{{ settings['poll_interval_seconds'] }}" required>
+        </label>
+        <label>
+          <span>Finality Lag</span>
+          <input name="finality_lag_blocks" type="number" min="0" max="20" value="{{ settings['finality_lag_blocks'] }}" required>
+        </label>
+        <label>
+          <span>TG Bot Token</span>
+          <input name="telegram_bot_token" value="{{ settings['telegram_bot_token'] }}">
+        </label>
+        <label>
+          <span>TG Chat ID</span>
+          <input name="telegram_chat_id" value="{{ settings['telegram_chat_id'] }}">
+        </label>
+        <div class="form-actions">
+          <button class="action" type="submit">Save Settings</button>
+        </div>
+      </form>
+      <form class="inline-form" method="post" action="/settings/test-telegram">
+        <button class="secondary" type="submit">Send Telegram Test</button>
+      </form>
+    </article>
+
+    <article class="panel">
+      <div class="panel-head">
+        <h2>Wallet Monitor</h2>
+        <p>Add addresses, set aliases, and pause or resume them any time.</p>
+      </div>
+      <form class="stack" method="post" action="/wallets">
+        <label>
+          <span>Wallet Address</span>
+          <input name="address" placeholder="5..." required>
+        </label>
+        <label>
+          <span>Alias</span>
+          <input name="alias" placeholder="Foundation Hot Wallet" required>
+        </label>
+        <button class="action" type="submit">Add Wallet</button>
+      </form>
+      <div class="wallet-list">
+        {% for wallet in wallets %}
+        <div class="wallet-row {{ 'wallet-disabled' if not wallet.enabled else '' }}">
+          <div>
+            <strong>{{ wallet.alias }}</strong>
+            <p>{{ wallet.address }}</p>
+          </div>
+          <div class="wallet-actions">
+            <form method="post" action="/wallets/{{ wallet.id }}/toggle">
+              <button class="{{ 'secondary' if wallet.enabled else 'ghost' }}" type="submit">
+                {{ 'Pause' if wallet.enabled else 'Resume' }}
+              </button>
+            </form>
+            <form method="post" action="/wallets/{{ wallet.id }}/delete">
+              <button class="ghost" type="submit">Delete</button>
+            </form>
+          </div>
+        </div>
+        {% else %}
+        <p class="muted">No wallets added yet.</p>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+
+  {% if current_is_superadmin %}
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Account Management</h2>
+      <p>Signed in as {{ current_username }}. Create extra accounts for friends here.</p>
+    </div>
+    <div class="grid admin-grid">
+      <div>
+        <form class="stack" method="post" action="/admin-users">
+          <label>
+            <span>New Username</span>
+            <input name="username" placeholder="friend01" required>
+          </label>
+          <label>
+            <span>New Password</span>
+            <input name="password" type="password" placeholder="At least 6 characters" required>
+          </label>
+          <button class="action" type="submit">Create User</button>
+        </form>
+      </div>
+      <div class="wallet-list">
+        {% for admin_user in admin_users %}
+        <div class="wallet-row {{ 'wallet-disabled' if not admin_user.is_superadmin and admin_user.username == current_username else '' }}">
+          <div>
+            <strong>{{ admin_user.username }}</strong>
+            <p>{{ 'Superadmin' if admin_user.is_superadmin else 'Standard user' }}</p>
+          </div>
+          <div class="wallet-actions">
+            {% if not admin_user.is_superadmin %}
+            <form method="post" action="/admin-users/{{ admin_user.id }}/delete">
+              <button class="ghost" type="submit">Delete User</button>
+            </form>
+            {% else %}
+            <span class="role-pill">Protected</span>
+            {% endif %}
+          </div>
+        </div>
+        {% else %}
+        <p class="muted">No admin users yet.</p>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="panel log-panel">
+    <div class="panel-head">
+      <h2>Recent Events</h2>
+      <p id="monitor-error">{{ state.last_error or "Monitor healthy" }}</p>
+    </div>
+    <div class="event-table">
+      <div class="event-head">
+        <span>Block</span>
+        <span>Event</span>
+        <span>Amount</span>
+        <span>Addresses</span>
+        <span>Time</span>
+      </div>
+      <div id="event-rows">
+        {% for event in events %}
+        <article
+          class="event-row"
+          data-block="{{ event.block_number }}"
+          data-event="{{ event.pallet }}.{{ event.event_name }}"
+          data-amount="{{ '%.6f'|format(event.amount_tao) }} TAO"
+          data-route="{{ (event.from_address or '-') ~ ' -> ' ~ (event.to_address or '-') }}"
+          data-time="{{ event.detected_at.strftime('%Y-%m-%d %H:%M:%S') }}"
+          data-message="{{ event.message }}"
+          data-raw="{{ event.raw_payload }}"
+        >
+          <span>#{{ event.block_number }}</span>
+          <span>{{ event.pallet }}.{{ event.event_name }}</span>
+          <span>{{ "%.6f"|format(event.amount_tao) }} TAO</span>
+          <span>{{ event.from_address or "-" }} -> {{ event.to_address or "-" }}</span>
+          <span>{{ event.detected_at.strftime("%Y-%m-%d %H:%M:%S") }}</span>
+        </article>
+        {% else %}
+        <p class="muted">No matched events yet.</p>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+</main>
+
+<section class="modal-shell hidden" id="event-modal">
+  <div class="modal-card">
+    <div class="panel-head">
+      <h2 id="modal-title">Event Details</h2>
+      <button class="ghost modal-close" id="modal-close" type="button">Close</button>
+    </div>
+    <div class="detail-grid">
+      <div><span>Block</span><strong id="modal-block">-</strong></div>
+      <div><span>Amount</span><strong id="modal-amount">-</strong></div>
+      <div><span>Route</span><strong id="modal-route">-</strong></div>
+      <div><span>Time</span><strong id="modal-time">-</strong></div>
+    </div>
+    <label class="detail-box">
+      <span>Message</span>
+      <textarea id="modal-message" rows="6" readonly></textarea>
+    </label>
+    <label class="detail-box">
+      <span>Raw Event</span>
+      <textarea id="modal-raw" rows="8" readonly></textarea>
+    </label>
+  </div>
+</section>
+{% endblock %}

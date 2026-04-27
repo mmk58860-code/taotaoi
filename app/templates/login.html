@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<main class="login-shell">
+  <section class="login-card">
+    <p class="eyebrow">TAO Monitor</p>
+    <h1 class="login-title">Enter Admin Password</h1>
+    <p class="lede">The monitor keeps running in the background. This login protects the web console.</p>
+    {% if error %}
+    <div class="banner error">{{ error }}</div>
+    {% endif %}
+    <form class="stack" method="post" action="/login">
+      <label>
+        <span>Username</span>
+        <input name="username" type="text" placeholder="Enter ADMIN_USERNAME" required>
+      </label>
+      <label>
+        <span>Password</span>
+        <input name="password" type="password" placeholder="Enter ADMIN_PASSWORD" required>
+      </label>
+      <button class="action" type="submit">Login</button>
+    </form>
+  </section>
+</main>
+{% endblock %}
