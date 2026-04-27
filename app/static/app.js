@@ -53,7 +53,61 @@ function wireEventModal() {
   });
 }
 
+function wireWorkspaceNav() {
+  // 左侧菜单负责切换右侧详情面板，只显示当前选中的一块内容。
+  const menuButtons = Array.from(document.querySelectorAll(".sidebar-link"));
+  const panels = Array.from(document.querySelectorAll(".workspace-panel"));
+  if (!menuButtons.length || !panels.length) return;
+
+  function activatePanel(panelId) {
+    menuButtons.forEach((button) => {
+      button.classList.toggle("is-active", button.dataset.panelTarget === panelId);
+    });
+    panels.forEach((panel) => {
+      panel.classList.toggle("is-active", panel.id === panelId);
+    });
+  }
+
+  menuButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      activatePanel(button.dataset.panelTarget);
+    });
+  });
+
+  const initiallyActive = menuButtons.find((button) => button.classList.contains("is-active")) || menuButtons[0];
+  if (initiallyActive) {
+    activatePanel(initiallyActive.dataset.panelTarget);
+  }
+}
+
+function wireThemeToggle() {
+  // 左侧底部颜色模式入口：在浅色和深色之间切换，并记住用户选择。
+  const toggleButton = document.getElementById("theme-toggle");
+  const toggleLabel = document.getElementById("theme-toggle-label");
+  const toggleIcon = document.getElementById("theme-toggle-icon");
+  if (!toggleButton || !toggleLabel || !toggleIcon) return;
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("tao-monitor-theme", theme);
+    const isLight = theme === "light";
+    toggleButton.setAttribute("aria-pressed", String(isLight));
+    toggleLabel.textContent = isLight ? "浅色模式" : "深色模式";
+    toggleIcon.textContent = isLight ? "☀" : "☾";
+  }
+
+  const initialTheme = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+  applyTheme(initialTheme);
+
+  toggleButton.addEventListener("click", () => {
+    const currentTheme = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+    applyTheme(currentTheme === "light" ? "dark" : "light");
+  });
+}
+
 // 页面加载后立即刷新一次，再按固定间隔轮询。
 window.setInterval(refreshState, 10000);
 refreshState();
 wireEventModal();
+wireWorkspaceNav();
+wireThemeToggle();

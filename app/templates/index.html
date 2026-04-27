@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 {% block content %}
-<main class="shell">
+<main class="shell shell-hero-wide">
   {% if notice %}
   <section class="banner {{ level }}">{{ notice }}</section>
   {% endif %}
 
-  <section class="hero">
+  <section class="hero hero-wide">
     <div>
       <p class="eyebrow">TAO 生态监控台</p>
       <h1>多账号隔离监控，钱包、阈值、TG 各自独立。</h1>
-      <p class="lede">当前登录账号：{{ current_username }}。每个后台账号都维护自己独立的钱包清单、Telegram 推送和大额阈值，不会和朋友的监控数据混在一起。</p>
+      <p class="lede">当前登录账号：{{ current_username }}。每个后台账号都维护自己独立的钱包清单、Telegram 推送和大额阈值。</p>
     </div>
     <div class="hero-actions">
       {% if current_is_superadmin %}
@@ -23,224 +23,263 @@
     </div>
   </section>
 
-  <section class="grid stats-grid">
-    <article class="panel stat">
-      <span>服务状态</span>
-      <strong id="monitor-status">{{ state.monitor_status }}</strong>
-      <small>最近扫描区块 {{ state.last_scanned_block }}</small>
-    </article>
-    <article class="panel stat">
-      <span>链上头部</span>
-      <strong id="last-seen-head">{{ state.last_seen_head }}</strong>
-      <small>finalized head</small>
-    </article>
-    <article class="panel stat">
-      <span>我的监控钱包</span>
-      <strong id="wallet-total">{{ wallets|length }}</strong>
-      <small id="wallet-active">启用中 {{ active_wallets }}</small>
-    </article>
-    <article class="panel stat">
-      <span>我的累计命中</span>
-      <strong>{{ total_events }}</strong>
-      <small id="server-online">服务器在线</small>
-    </article>
-  </section>
-
-  <section class="grid {{ 'main-grid' if current_is_superadmin else 'single-grid' }}">
-    {% if current_is_superadmin %}
-    <article class="panel">
-      <div class="panel-head">
-        <h2>系统设置</h2>
-        <p>只有总管理员可以修改链节点与扫描节奏。</p>
-      </div>
-      <form class="stack" method="post" action="/settings/system">
-        <label>
-          <span>Subtensor WS</span>
-          <input name="subtensor_ws_url" value="{{ system_settings['subtensor_ws_url'] }}" required>
-        </label>
-        <label>
-          <span>网络名称</span>
-          <input name="network_name" value="{{ system_settings['network_name'] }}" required>
-        </label>
-        <label>
-          <span>扫描间隔（秒）</span>
-          <input name="poll_interval_seconds" type="number" min="2" max="120" value="{{ system_settings['poll_interval_seconds'] }}" required>
-        </label>
-        <label>
-          <span>Finality Lag</span>
-          <input name="finality_lag_blocks" type="number" min="0" max="20" value="{{ system_settings['finality_lag_blocks'] }}" required>
-        </label>
-        <div class="form-actions">
-          <button class="action" type="submit">保存系统设置</button>
+  <div class="content-shell">
+    <div class="workspace-shell">
+      <aside class="panel sidebar-nav">
+        <div class="sidebar-head">
+          <p class="eyebrow">功能菜单</p>
+          <h2>左侧导航</h2>
         </div>
-      </form>
-    </article>
-    {% endif %}
-
-    <article class="panel">
-      <div class="panel-head">
-        <h2>我的通知设置</h2>
-        <p>每个账号各自维护自己的 Telegram 和大额阈值。阈值填 `0` 可关闭大额监控。</p>
-      </div>
-      <form class="stack" method="post" action="/settings/notification">
-        <label>
-          <span>大额阈值（TAO）</span>
-          <input name="large_transfer_threshold_tao" type="number" min="0" step="0.000001" value="{{ user_settings['large_transfer_threshold_tao'] }}" required>
-        </label>
-        <label>
-          <span>TG Bot Token</span>
-          <input name="telegram_bot_token" value="{{ user_settings['telegram_bot_token'] }}">
-        </label>
-        <label>
-          <span>TG Chat ID</span>
-          <input name="telegram_chat_id" value="{{ user_settings['telegram_chat_id'] }}">
-        </label>
-        <div class="form-actions">
-          <button class="action" type="submit">保存我的通知设置</button>
+        <div class="sidebar-menu">
+          <button class="sidebar-link is-active" type="button" data-panel-target="overview-panel">服务概览</button>
+          {% if current_is_superadmin %}
+          <button class="sidebar-link" type="button" data-panel-target="system-panel">系统设置</button>
+          {% endif %}
+          <button class="sidebar-link" type="button" data-panel-target="alert-panel">大额预警</button>
+          <button class="sidebar-link" type="button" data-panel-target="wallet-panel">钱包监控</button>
+          <button class="sidebar-link" type="button" data-panel-target="backup-panel">钱包备份</button>
+          {% if current_is_superadmin %}
+          <button class="sidebar-link" type="button" data-panel-target="accounts-panel">账号管理</button>
+          {% endif %}
         </div>
-      </form>
-      <form class="inline-form" method="post" action="/settings/test-telegram">
-        <button class="secondary" type="submit">发送当前账号的 Telegram 测试消息</button>
-      </form>
-    </article>
-  </section>
+        <div class="sidebar-footer">
+          <button class="sidebar-theme-toggle" id="theme-toggle" type="button" aria-pressed="false">
+            <span class="theme-toggle-icon" id="theme-toggle-icon">☾</span>
+            <span class="theme-toggle-label" id="theme-toggle-label">深色模式</span>
+          </button>
+        </div>
+      </aside>
 
-  <section class="grid main-grid">
-    <article class="panel">
-      <div class="panel-head">
-        <h2>我的钱包监控</h2>
-        <p>这里只会显示当前账号自己的钱包列表，和其他账号完全隔离。</p>
-      </div>
-      <form class="stack" method="post" action="/wallets">
-        <label>
-          <span>钱包地址</span>
-          <input name="address" placeholder="5..." required>
-        </label>
-        <label>
-          <span>备注别名</span>
-          <input name="alias" placeholder="基金会热钱包" required>
-        </label>
-        <button class="action" type="submit">添加钱包</button>
-      </form>
-      <div class="wallet-list">
-        {% for wallet in wallets %}
-        <div class="wallet-row {{ 'wallet-disabled' if not wallet.enabled else '' }}">
-          <div>
-            <strong>{{ wallet.alias }}</strong>
-            <p>{{ wallet.address }}</p>
-          </div>
-          <div class="wallet-actions">
-            <form method="post" action="/wallets/{{ wallet.id }}/toggle">
-              <button class="{{ 'secondary' if wallet.enabled else 'ghost' }}" type="submit">
-                {{ '暂停监控' if wallet.enabled else '恢复监控' }}
-              </button>
+      <div class="workspace-content">
+        <section class="workspace-panel is-active" id="overview-panel">
+          <section class="grid stats-grid stats-grid-compact">
+            <article class="panel stat">
+              <span>服务状态</span>
+              <strong id="monitor-status">{{ state.monitor_status }}</strong>
+              <small>最近扫描区块 {{ state.last_scanned_block }}</small>
+            </article>
+            <article class="panel stat">
+              <span>链上头部</span>
+              <strong id="last-seen-head">{{ state.last_seen_head }}</strong>
+              <small>finalized head</small>
+            </article>
+            <article class="panel stat">
+              <span>我的监控钱包</span>
+              <strong id="wallet-total">{{ wallets|length }}</strong>
+              <small id="wallet-active">启用中 {{ active_wallets }}</small>
+            </article>
+            <article class="panel stat">
+              <span>我的累计命中</span>
+              <strong>{{ total_events }}</strong>
+              <small id="server-online">服务器在线</small>
+            </article>
+          </section>
+
+          <section class="panel log-panel">
+            <div class="panel-head">
+              <h2>我的最近命中动作</h2>
+              <p id="monitor-error">{{ state.last_error or "监听正常" }}</p>
+            </div>
+            <div class="event-table">
+              <div class="event-head">
+                <span>区块</span>
+                <span>动作</span>
+                <span>金额估值</span>
+                <span>签名者 / 主路径</span>
+                <span>时间</span>
+              </div>
+              <div id="event-rows">
+                {% for event in events %}
+                <article
+                  class="event-row"
+                  data-block="{{ event.block_number }}"
+                  data-event="{{ event.action_type or event.call_name or event.event_name }}"
+                  data-amount="{{ '%.6f'|format(event.amount_tao) }} TAO"
+                  data-route="{{ (event.signer_address or '-') ~ ' / ' ~ ((event.from_address or '-') ~ ' -> ' ~ (event.to_address or '-')) }}"
+                  data-time="{{ event.detected_at.strftime('%Y-%m-%d %H:%M:%S') }}"
+                  data-message="{{ event.message }}"
+                  data-raw="{{ event.raw_payload }}"
+                >
+                  <span>#{{ event.block_number }}</span>
+                  <span>{{ event.pallet }}.{{ event.call_name or event.event_name }}{% if not event.success %}（失败）{% endif %}</span>
+                  <span>{{ "%.6f"|format(event.amount_tao) }} TAO</span>
+                  <span>{{ event.signer_address or "-" }} / {{ event.from_address or "-" }} -> {{ event.to_address or "-" }}</span>
+                  <span>{{ event.detected_at.strftime("%Y-%m-%d %H:%M:%S") }}</span>
+                </article>
+                {% else %}
+                <p class="muted">当前账号还没有命中动作。</p>
+                {% endfor %}
+              </div>
+            </div>
+          </section>
+        </section>
+
+        {% if current_is_superadmin %}
+        <section class="workspace-panel" id="system-panel">
+          <article class="panel">
+            <div class="panel-head">
+              <h2>系统设置</h2>
+              <p>只有总管理员可以修改链节点与扫描节奏。</p>
+            </div>
+            <form class="stack" method="post" action="/settings/system">
+              <label>
+                <span>Subtensor WS</span>
+                <input name="subtensor_ws_url" value="{{ system_settings['subtensor_ws_url'] }}" required>
+              </label>
+              <label>
+                <span>网络名称</span>
+                <input name="network_name" value="{{ system_settings['network_name'] }}" required>
+              </label>
+              <label>
+                <span>扫描间隔（秒）</span>
+                <input name="poll_interval_seconds" type="number" min="2" max="120" value="{{ system_settings['poll_interval_seconds'] }}" required>
+              </label>
+              <label>
+                <span>Finality Lag</span>
+                <input name="finality_lag_blocks" type="number" min="0" max="20" value="{{ system_settings['finality_lag_blocks'] }}" required>
+              </label>
+              <div class="form-actions">
+                <button class="action" type="submit">保存系统设置</button>
+              </div>
             </form>
-            <form method="post" action="/wallets/{{ wallet.id }}/delete">
-              <button class="ghost" type="submit">删除</button>
+          </article>
+        </section>
+        {% endif %}
+
+        <section class="workspace-panel" id="alert-panel">
+          <article class="panel">
+            <div class="panel-head">
+              <h2>大额预警</h2>
+              <p>每个账号各自维护自己的 Telegram 和大额阈值。阈值填 `0` 可关闭大额监控。</p>
+            </div>
+            <form class="stack" method="post" action="/settings/notification">
+              <label>
+                <span>大额阈值（TAO）</span>
+                <input name="large_transfer_threshold_tao" type="number" min="0" step="0.000001" value="{{ user_settings['large_transfer_threshold_tao'] }}" required>
+              </label>
+              <label>
+                <span>TG Bot Token</span>
+                <input name="telegram_bot_token" value="{{ user_settings['telegram_bot_token'] }}">
+              </label>
+              <label>
+                <span>TG Chat ID</span>
+                <input name="telegram_chat_id" value="{{ user_settings['telegram_chat_id'] }}">
+              </label>
+              <div class="form-actions">
+                <button class="action" type="submit">保存大额预警设置</button>
+              </div>
             </form>
-          </div>
-        </div>
-        {% else %}
-        <p class="muted">当前账号还没有添加监控钱包。</p>
-        {% endfor %}
-      </div>
-    </article>
-
-    <article class="panel">
-      <div class="panel-head">
-        <h2>钱包备份</h2>
-        <p>网页备份只导出当前账号的钱包地址、备注和开关状态，不包含系统密钥、TG 凭据或其他账号资料。</p>
-      </div>
-      <div class="stack">
-        <p class="muted">点击按钮后会由浏览器直接下载 CSV 文件。浏览器无法由服务器强制保存到桌面，但你可以把下载文件保存到桌面或本地任意目录。</p>
-        <a class="action inline-link" href="/backups/wallets/export">下载当前账号的钱包备份</a>
-      </div>
-    </article>
-  </section>
-
-  {% if current_is_superadmin %}
-  <section class="panel">
-    <div class="panel-head">
-      <h2>账号管理</h2>
-      <p>总管理员可以创建朋友账号，也可以查看系统里保存的可回显密码。</p>
-    </div>
-    <div class="grid admin-grid">
-      <div>
-        <form class="stack" method="post" action="/admin-users">
-          <label>
-            <span>新账号用户名</span>
-            <input name="username" placeholder="friend01" required>
-          </label>
-          <label>
-            <span>新账号密码</span>
-            <input name="password" type="password" placeholder="至少 6 个字符" required>
-          </label>
-          <button class="action" type="submit">创建账号</button>
-        </form>
-      </div>
-      <div class="wallet-list">
-        {% for admin_user in admin_users %}
-        <div class="wallet-row">
-          <div>
-            <strong>{{ admin_user.username }}</strong>
-            <p>{{ '总管理员' if admin_user.is_superadmin else '普通账号' }}</p>
-            <p>可查看密码：{{ admin_user_passwords[admin_user.id] }}</p>
-          </div>
-          <div class="wallet-actions">
-            {% if not admin_user.is_superadmin %}
-            <form method="post" action="/admin-users/{{ admin_user.id }}/delete">
-              <button class="ghost" type="submit">删除账号</button>
+            <form class="inline-form" method="post" action="/settings/test-telegram">
+              <button class="secondary" type="submit">发送当前账号的 Telegram 测试消息</button>
             </form>
-            {% else %}
-            <span class="role-pill">受保护</span>
-            {% endif %}
-          </div>
-        </div>
-        {% else %}
-        <p class="muted">还没有后台账号。</p>
-        {% endfor %}
-      </div>
-    </div>
-  </section>
-  {% endif %}
+          </article>
+        </section>
 
-  <section class="panel log-panel">
-    <div class="panel-head">
-      <h2>我的最近命中动作</h2>
-      <p id="monitor-error">{{ state.last_error or "监听正常" }}</p>
-    </div>
-    <div class="event-table">
-      <div class="event-head">
-        <span>区块</span>
-        <span>动作</span>
-        <span>金额估值</span>
-        <span>签名者 / 主路径</span>
-        <span>时间</span>
+        <section class="workspace-panel" id="wallet-panel">
+          <article class="panel">
+            <div class="panel-head">
+              <h2>钱包监控</h2>
+              <p>这里只会显示当前账号自己的钱包列表。</p>
+            </div>
+            <form class="stack" method="post" action="/wallets">
+              <label>
+                <span>钱包地址</span>
+                <input name="address" placeholder="5..." required>
+              </label>
+              <label>
+                <span>备注别名</span>
+                <input name="alias" placeholder="基金会热钱包" required>
+              </label>
+              <button class="action" type="submit">添加钱包</button>
+            </form>
+            <div class="wallet-list">
+              {% for wallet in wallets %}
+              <div class="wallet-row {{ 'wallet-disabled' if not wallet.enabled else '' }}">
+                <div>
+                  <strong>{{ wallet.alias }}</strong>
+                  <p>{{ wallet.address }}</p>
+                </div>
+                <div class="wallet-actions">
+                  <form method="post" action="/wallets/{{ wallet.id }}/toggle">
+                    <button class="{{ 'secondary' if wallet.enabled else 'ghost' }}" type="submit">
+                      {{ '暂停监控' if wallet.enabled else '恢复监控' }}
+                    </button>
+                  </form>
+                  <form method="post" action="/wallets/{{ wallet.id }}/delete">
+                    <button class="ghost" type="submit">删除</button>
+                  </form>
+                </div>
+              </div>
+              {% else %}
+              <p class="muted">当前账号还没有添加监控钱包。</p>
+              {% endfor %}
+            </div>
+          </article>
+        </section>
+
+        <section class="workspace-panel" id="backup-panel">
+          <article class="panel">
+            <div class="panel-head">
+              <h2>钱包备份</h2>
+              <p>网页备份只导出当前账号的钱包地址、备注和开关状态，不包含系统密钥、TG 凭据或其他账号资料。</p>
+            </div>
+            <div class="stack">
+              <p class="muted">点击按钮后会由浏览器直接下载 CSV 文件。浏览器无法由服务器强制保存到桌面，但你可以把下载文件保存到桌面或本地任意目录。</p>
+              <a class="action inline-link" href="/backups/wallets/export">下载当前账号的钱包备份</a>
+            </div>
+          </article>
+        </section>
+
+        {% if current_is_superadmin %}
+        <section class="workspace-panel" id="accounts-panel">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>账号管理</h2>
+              <p>总管理员可以创建朋友账号，也可以查看系统里保存的可回显密码。</p>
+            </div>
+            <div class="grid admin-grid">
+              <div>
+                <form class="stack" method="post" action="/admin-users">
+                  <label>
+                    <span>新账号用户名</span>
+                    <input name="username" placeholder="friend01" required>
+                  </label>
+                  <label>
+                    <span>新账号密码</span>
+                    <input name="password" type="password" placeholder="至少 6 个字符" required>
+                  </label>
+                  <button class="action" type="submit">创建账号</button>
+                </form>
+              </div>
+              <div class="wallet-list">
+                {% for admin_user in admin_users %}
+                <div class="wallet-row">
+                  <div>
+                    <strong>{{ admin_user.username }}</strong>
+                    <p>{{ '总管理员' if admin_user.is_superadmin else '普通账号' }}</p>
+                    <p>可查看密码：{{ admin_user_passwords[admin_user.id] }}</p>
+                  </div>
+                  <div class="wallet-actions">
+                    {% if not admin_user.is_superadmin %}
+                    <form method="post" action="/admin-users/{{ admin_user.id }}/delete">
+                      <button class="ghost" type="submit">删除账号</button>
+                    </form>
+                    {% else %}
+                    <span class="role-pill">受保护</span>
+                    {% endif %}
+                  </div>
+                </div>
+                {% else %}
+                <p class="muted">还没有后台账号。</p>
+                {% endfor %}
+              </div>
+            </div>
+          </section>
+        </section>
+        {% endif %}
       </div>
-      <div id="event-rows">
-        {% for event in events %}
-        <article
-          class="event-row"
-          data-block="{{ event.block_number }}"
-          data-event="{{ event.action_type or event.call_name or event.event_name }}"
-          data-amount="{{ '%.6f'|format(event.amount_tao) }} TAO"
-          data-route="{{ (event.signer_address or '-') ~ ' / ' ~ ((event.from_address or '-') ~ ' -> ' ~ (event.to_address or '-')) }}"
-          data-time="{{ event.detected_at.strftime('%Y-%m-%d %H:%M:%S') }}"
-          data-message="{{ event.message }}"
-          data-raw="{{ event.raw_payload }}"
-        >
-          <span>#{{ event.block_number }}</span>
-          <span>{{ event.pallet }}.{{ event.call_name or event.event_name }}{% if not event.success %}（失败）{% endif %}</span>
-          <span>{{ "%.6f"|format(event.amount_tao) }} TAO</span>
-          <span>{{ event.signer_address or "-" }} / {{ event.from_address or "-" }} -> {{ event.to_address or "-" }}</span>
-          <span>{{ event.detected_at.strftime("%Y-%m-%d %H:%M:%S") }}</span>
-        </article>
-        {% else %}
-        <p class="muted">当前账号还没有命中动作。</p>
-        {% endfor %}
-      </div>
     </div>
-  </section>
+  </div>
 </main>
 
 <section class="modal-shell hidden" id="event-modal">
