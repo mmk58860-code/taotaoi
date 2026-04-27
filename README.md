@@ -66,11 +66,19 @@ chmod +x scripts/*.sh
 ./scripts/deploy.sh
 ```
 
-4. 编辑生产配置：
+4. 如需补充或修改生产配置，编辑 `.env`：
 
 ```bash
 sudo nano /opt/tao-monitor/.env
 ```
+
+如果你部署目录不是 `/opt/tao-monitor`，请把上面的路径换成你自己的实际安装目录。
+
+说明：
+
+- 第一次运行 `./scripts/deploy.sh` 时，脚本已经会自动创建 `.env`
+- 并且会写入网页端口、总管理员账号、总管理员密码、`SECRET_KEY`
+- 你通常只需要在这里继续补充或修改 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`SUBTENSOR_WS_URL` 等运行配置
 
 至少填写这些值：
 
@@ -83,10 +91,19 @@ ADMIN_USERNAME=你的网页登录总管理员账号
 ADMIN_PASSWORD=你的网页登录总管理员密码
 ```
 
-5. 重启服务：
+5. 改完配置后重启服务：
 
 ```bash
 sudo systemctl restart tao-monitor.service
+```
+
+说明：
+
+- `./scripts/deploy.sh` 首次部署时已经自动执行过 `systemctl enable tao-monitor.service`
+- 所以后续只是修改 `.env` 或更新配置时，通常只需要执行 `restart`
+- 如果你想手动确认开机自启状态，可以执行：
+
+```bash
 sudo systemctl enable tao-monitor.service
 ```
 
@@ -107,6 +124,7 @@ sudo systemctl enable tao-monitor.service
 - 备份放在 `/opt/tao-monitor/backups/`
 - `scripts/update.sh` 在 `git pull` 前会先调用备份脚本
 - `data/`、`logs/`、`backups/` 默认都不纳入 Git 管理，所以更新不会覆盖资料
+- 如果你的实际部署目录不是 `/opt/tao-monitor`，下面更新命令里的路径也要一起替换
 
 更新命令：
 
