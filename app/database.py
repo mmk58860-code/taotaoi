@@ -183,6 +183,16 @@ def _ensure_index(connection, table_name: str, index_name: str, create_sql: str)
 def _rebuild_wallet_watches(connection, superadmin_user_id: int) -> None:
     # 重建钱包表，改成“同一监控菜单内地址唯一”。
     connection.execute(text("ALTER TABLE wallet_watches RENAME TO wallet_watches_legacy"))
+    _drop_indexes_if_exist(
+        connection,
+        [
+            "ix_wallet_watches_address",
+            "ix_wallet_watches_owner_user_id",
+            "ix_wallet_watches_monitor_menu_id",
+            "uq_wallet_owner_address",
+            "uq_wallet_menu_address",
+        ],
+    )
     connection.execute(
         text(
             """
@@ -227,6 +237,20 @@ def _rebuild_wallet_watches(connection, superadmin_user_id: int) -> None:
 def _rebuild_chain_events(connection, superadmin_user_id: int) -> None:
     # 重建事件表，把历史事件迁到对应账号的钱包监控菜单下。
     connection.execute(text("ALTER TABLE chain_events RENAME TO chain_events_legacy"))
+    _drop_indexes_if_exist(
+        connection,
+        [
+            "ix_chain_events_owner_user_id",
+            "ix_chain_events_monitor_menu_id",
+            "ix_chain_events_block_number",
+            "ix_chain_events_from_address",
+            "ix_chain_events_to_address",
+            "ix_chain_events_signer_address",
+            "ix_chain_events_detected_at",
+            "uq_owner_block_event",
+            "uq_menu_block_event",
+        ],
+    )
     connection.execute(
         text(
             """
@@ -303,6 +327,12 @@ def _rebuild_chain_events(connection, superadmin_user_id: int) -> None:
         {"owner_user_id": superadmin_user_id},
     )
     connection.execute(text("DROP TABLE chain_events_legacy"))
+
+
+def _drop_indexes_if_exist(connection, index_names: list[str]) -> None:
+    # SQLite 在 rename table 后会保留旧索引名，重建同名索引前需要先清掉。
+    for index_name in index_names:
+        connection.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
 
 
 def _ensure_builtin_monitor_menus_sql(connection, owner_user_id: int) -> None:
