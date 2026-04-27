@@ -8,13 +8,15 @@
   <section class="hero">
     <div>
       <p class="eyebrow">TAO 生态监控台</p>
-      <h1>区块、钱包、阈值交易，一处管理。</h1>
-      <p class="lede">服务会持续监听 TAO 链转账事件，把命中的大额交易和你关注的钱包动态及时推送到 Telegram。</p>
+      <h1>多账号隔离监控，钱包、阈值、TG 各自独立。</h1>
+      <p class="lede">当前登录账号：{{ current_username }}。每个后台账号都维护自己独立的钱包清单、Telegram 推送和大额阈值，不会和朋友的监控数据混在一起。</p>
     </div>
     <div class="hero-actions">
+      {% if current_is_superadmin %}
       <form method="post" action="/monitor/restart">
         <button class="action" type="submit">重新载入监听</button>
       </form>
+      {% endif %}
       <form method="post" action="/logout">
         <button class="ghost" type="submit">退出登录</button>
       </form>
@@ -33,65 +35,81 @@
       <small>finalized head</small>
     </article>
     <article class="panel stat">
-      <span>监控钱包</span>
+      <span>我的监控钱包</span>
       <strong id="wallet-total">{{ wallets|length }}</strong>
       <small id="wallet-active">启用中 {{ active_wallets }}</small>
     </article>
     <article class="panel stat">
-      <span>累计命中</span>
+      <span>我的累计命中</span>
       <strong>{{ total_events }}</strong>
       <small id="server-online">服务器在线</small>
+    </article>
+  </section>
+
+  <section class="grid {{ 'main-grid' if current_is_superadmin else 'single-grid' }}">
+    {% if current_is_superadmin %}
+    <article class="panel">
+      <div class="panel-head">
+        <h2>系统设置</h2>
+        <p>只有总管理员可以修改链节点与扫描节奏。</p>
+      </div>
+      <form class="stack" method="post" action="/settings/system">
+        <label>
+          <span>Subtensor WS</span>
+          <input name="subtensor_ws_url" value="{{ system_settings['subtensor_ws_url'] }}" required>
+        </label>
+        <label>
+          <span>网络名称</span>
+          <input name="network_name" value="{{ system_settings['network_name'] }}" required>
+        </label>
+        <label>
+          <span>扫描间隔（秒）</span>
+          <input name="poll_interval_seconds" type="number" min="2" max="120" value="{{ system_settings['poll_interval_seconds'] }}" required>
+        </label>
+        <label>
+          <span>Finality Lag</span>
+          <input name="finality_lag_blocks" type="number" min="0" max="20" value="{{ system_settings['finality_lag_blocks'] }}" required>
+        </label>
+        <div class="form-actions">
+          <button class="action" type="submit">保存系统设置</button>
+        </div>
+      </form>
+    </article>
+    {% endif %}
+
+    <article class="panel">
+      <div class="panel-head">
+        <h2>我的通知设置</h2>
+        <p>每个账号各自维护自己的 Telegram 和大额阈值。阈值填 `0` 可关闭大额监控。</p>
+      </div>
+      <form class="stack" method="post" action="/settings/notification">
+        <label>
+          <span>大额阈值（TAO）</span>
+          <input name="large_transfer_threshold_tao" type="number" min="0" step="0.000001" value="{{ user_settings['large_transfer_threshold_tao'] }}" required>
+        </label>
+        <label>
+          <span>TG Bot Token</span>
+          <input name="telegram_bot_token" value="{{ user_settings['telegram_bot_token'] }}">
+        </label>
+        <label>
+          <span>TG Chat ID</span>
+          <input name="telegram_chat_id" value="{{ user_settings['telegram_chat_id'] }}">
+        </label>
+        <div class="form-actions">
+          <button class="action" type="submit">保存我的通知设置</button>
+        </div>
+      </form>
+      <form class="inline-form" method="post" action="/settings/test-telegram">
+        <button class="secondary" type="submit">发送当前账号的 Telegram 测试消息</button>
+      </form>
     </article>
   </section>
 
   <section class="grid main-grid">
     <article class="panel">
       <div class="panel-head">
-        <h2>运行设置</h2>
-        <p>修改后会在下一轮扫描里立即生效。</p>
-      </div>
-      <form class="stack" method="post" action="/settings">
-        <label>
-          <span>Subtensor WS</span>
-          <input name="subtensor_ws_url" value="{{ settings['subtensor_ws_url'] }}" required>
-        </label>
-        <label>
-          <span>网络名称</span>
-          <input name="network_name" value="{{ settings['network_name'] }}" required>
-        </label>
-        <label>
-          <span>大额阈值（TAO）</span>
-          <input name="large_transfer_threshold_tao" type="number" min="0" step="0.000001" value="{{ settings['large_transfer_threshold_tao'] }}" required>
-        </label>
-        <label>
-          <span>扫描间隔（秒）</span>
-          <input name="poll_interval_seconds" type="number" min="2" max="120" value="{{ settings['poll_interval_seconds'] }}" required>
-        </label>
-        <label>
-          <span>Finality Lag</span>
-          <input name="finality_lag_blocks" type="number" min="0" max="20" value="{{ settings['finality_lag_blocks'] }}" required>
-        </label>
-        <label>
-          <span>TG Bot Token</span>
-          <input name="telegram_bot_token" value="{{ settings['telegram_bot_token'] }}">
-        </label>
-        <label>
-          <span>TG Chat ID</span>
-          <input name="telegram_chat_id" value="{{ settings['telegram_chat_id'] }}">
-        </label>
-        <div class="form-actions">
-          <button class="action" type="submit">保存设置</button>
-        </div>
-      </form>
-      <form class="inline-form" method="post" action="/settings/test-telegram">
-        <button class="secondary" type="submit">发送 Telegram 测试消息</button>
-      </form>
-    </article>
-
-    <article class="panel">
-      <div class="panel-head">
-        <h2>钱包监控</h2>
-        <p>导入地址、设置别名，也可以随时暂停和恢复。</p>
+        <h2>我的钱包监控</h2>
+        <p>这里只会显示当前账号自己的钱包列表，和其他账号完全隔离。</p>
       </div>
       <form class="stack" method="post" action="/wallets">
         <label>
@@ -123,8 +141,19 @@
           </div>
         </div>
         {% else %}
-        <p class="muted">还没有添加监控钱包。</p>
+        <p class="muted">当前账号还没有添加监控钱包。</p>
         {% endfor %}
+      </div>
+    </article>
+
+    <article class="panel">
+      <div class="panel-head">
+        <h2>钱包备份</h2>
+        <p>网页备份只导出当前账号的钱包地址、备注和开关状态，不包含系统密钥、TG 凭据或其他账号资料。</p>
+      </div>
+      <div class="stack">
+        <p class="muted">点击按钮后会由浏览器直接下载 CSV 文件。浏览器无法由服务器强制保存到桌面，但你可以把下载文件保存到桌面或本地任意目录。</p>
+        <a class="action inline-link" href="/backups/wallets/export">下载当前账号的钱包备份</a>
       </div>
     </article>
   </section>
@@ -133,7 +162,7 @@
   <section class="panel">
     <div class="panel-head">
       <h2>账号管理</h2>
-      <p>当前登录账号：{{ current_username }}。你可以在这里给朋友创建新的后台账号。</p>
+      <p>总管理员可以创建朋友账号，也可以查看系统里保存的可回显密码。</p>
     </div>
     <div class="grid admin-grid">
       <div>
@@ -151,10 +180,11 @@
       </div>
       <div class="wallet-list">
         {% for admin_user in admin_users %}
-        <div class="wallet-row {{ 'wallet-disabled' if not admin_user.is_superadmin and admin_user.username == current_username else '' }}">
+        <div class="wallet-row">
           <div>
             <strong>{{ admin_user.username }}</strong>
             <p>{{ '总管理员' if admin_user.is_superadmin else '普通账号' }}</p>
+            <p>可查看密码：{{ admin_user_passwords[admin_user.id] }}</p>
           </div>
           <div class="wallet-actions">
             {% if not admin_user.is_superadmin %}
@@ -176,15 +206,15 @@
 
   <section class="panel log-panel">
     <div class="panel-head">
-      <h2>最近命中事件</h2>
+      <h2>我的最近命中动作</h2>
       <p id="monitor-error">{{ state.last_error or "监听正常" }}</p>
     </div>
     <div class="event-table">
       <div class="event-head">
         <span>区块</span>
-        <span>事件</span>
-        <span>金额</span>
-        <span>地址</span>
+        <span>动作</span>
+        <span>金额估值</span>
+        <span>签名者 / 主路径</span>
         <span>时间</span>
       </div>
       <div id="event-rows">
@@ -192,21 +222,21 @@
         <article
           class="event-row"
           data-block="{{ event.block_number }}"
-          data-event="{{ event.pallet }}.{{ event.event_name }}"
+          data-event="{{ event.action_type or event.call_name or event.event_name }}"
           data-amount="{{ '%.6f'|format(event.amount_tao) }} TAO"
-          data-route="{{ (event.from_address or '-') ~ ' -> ' ~ (event.to_address or '-') }}"
+          data-route="{{ (event.signer_address or '-') ~ ' / ' ~ ((event.from_address or '-') ~ ' -> ' ~ (event.to_address or '-')) }}"
           data-time="{{ event.detected_at.strftime('%Y-%m-%d %H:%M:%S') }}"
           data-message="{{ event.message }}"
           data-raw="{{ event.raw_payload }}"
         >
           <span>#{{ event.block_number }}</span>
-          <span>{{ event.pallet }}.{{ event.event_name }}</span>
+          <span>{{ event.pallet }}.{{ event.call_name or event.event_name }}{% if not event.success %}（失败）{% endif %}</span>
           <span>{{ "%.6f"|format(event.amount_tao) }} TAO</span>
-          <span>{{ event.from_address or "-" }} -> {{ event.to_address or "-" }}</span>
+          <span>{{ event.signer_address or "-" }} / {{ event.from_address or "-" }} -> {{ event.to_address or "-" }}</span>
           <span>{{ event.detected_at.strftime("%Y-%m-%d %H:%M:%S") }}</span>
         </article>
         {% else %}
-        <p class="muted">还没有命中事件。</p>
+        <p class="muted">当前账号还没有命中动作。</p>
         {% endfor %}
       </div>
     </div>

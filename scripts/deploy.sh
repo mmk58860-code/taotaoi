@@ -85,13 +85,40 @@ PY
   fi
 fi
 
-# 把交互输入写回 .env，后续 systemd 直接读取。
-run_privileged sed -i \
-  -e "s|^APP_PORT=.*|APP_PORT=${PORT}|" \
-  -e "s|^ADMIN_USERNAME=.*|ADMIN_USERNAME=${ADMIN_USERNAME}|" \
-  -e "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=${ADMIN_PASSWORD}|" \
-  -e "s|^SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|" \
-  .env
+# 把交互输入安全写回 .env，避免密码里带特殊字符时把配置文件写坏。
+run_as_app_user python3 - "$APP_DIR/.env" "$PORT" "$ADMIN_USERNAME" "$ADMIN_PASSWORD" "$SECRET_KEY" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+updates = {
+    "APP_PORT": sys.argv[2],
+    "ADMIN_USERNAME": sys.argv[3],
+    "ADMIN_PASSWORD": sys.argv[4],
+    "SECRET_KEY": sys.argv[5],
+}
+
+lines = env_path.read_text(encoding="utf-8").splitlines()
+seen = set()
+result = []
+
+for line in lines:
+    if "=" not in line or line.lstrip().startswith("#"):
+        result.append(line)
+        continue
+    key, _, _ = line.partition("=")
+    if key in updates:
+        result.append(f"{key}={updates[key]}")
+        seen.add(key)
+    else:
+        result.append(line)
+
+for key, value in updates.items():
+    if key not in seen:
+        result.append(f"{key}={value}")
+
+env_path.write_text("\n".join(result) + "\n", encoding="utf-8")
+PY
 
 # 根据当前项目实际路径生成 systemd 服务文件。
 run_privileged bash -lc "$(cat <<EOF

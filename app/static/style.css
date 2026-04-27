@@ -130,6 +130,10 @@ small {
   grid-template-columns: 1.1fr 0.9fr;
 }
 
+.single-grid {
+  grid-template-columns: 1fr;
+}
+
 .admin-grid {
   grid-template-columns: 0.9fr 1.1fr;
 }
