@@ -13,7 +13,8 @@ from sqlalchemy import select
 from substrateinterface import SubstrateInterface
 
 from app.database import session_scope
-from app.models import ChainEvent, MonitorState, UserSetting, WalletWatch
+from app.models import ChainEvent, MonitorMenu, MonitorState, WalletWatch
+from app.services.monitor_menu_service import BUILTIN_ALERT_KIND
 from app.services.settings_service import get_system_runtime_settings, typed_system_runtime_settings
 from app.services.telegram import TelegramNotifier
 
@@ -72,7 +73,10 @@ ACTION_TITLES: dict[str, str] = {
 
 @dataclass
 class NotificationProfile:
+    monitor_menu_id: int
     owner_user_id: int
+    menu_kind: str
+    menu_name: str
     threshold_tao: float
     telegram_bot_token: str
     telegram_chat_id: str
@@ -100,7 +104,9 @@ class CallEnvelope:
 
 @dataclass
 class ActionRecord:
+    monitor_menu_id: int
     owner_user_id: int
+    menu_name: str
     block_number: int
     event_index: int
     extrinsic_index: int
@@ -187,17 +193,20 @@ class SubtensorMonitor:
             raw_settings = get_system_runtime_settings(session)
             typed = typed_system_runtime_settings(raw_settings)
             state = ensure_state(session)
+            menu_rows = session.scalars(select(MonitorMenu).order_by(MonitorMenu.sort_order.asc(), MonitorMenu.id.asc())).all()
             wallet_rows = session.scalars(select(WalletWatch).where(WalletWatch.enabled.is_(True))).all()
-            user_setting_rows = session.scalars(select(UserSetting)).all()
             watch_map = self._build_watch_map(wallet_rows)
             profile_map = {
-                row.owner_user_id: NotificationProfile(
+                row.id: NotificationProfile(
+                    monitor_menu_id=row.id,
                     owner_user_id=row.owner_user_id,
+                    menu_kind=row.menu_kind,
+                    menu_name=row.name,
                     threshold_tao=float(row.large_transfer_threshold_tao),
                     telegram_bot_token=row.telegram_bot_token,
                     telegram_chat_id=row.telegram_chat_id,
                 )
-                for row in user_setting_rows
+                for row in menu_rows
             }
             state.monitor_status = "running"
             state.last_error = None
@@ -229,10 +238,10 @@ class SubtensorMonitor:
                 state.updated_at = datetime.utcnow()
 
     def _build_watch_map(self, wallet_rows: list[WalletWatch]) -> dict[str, dict[int, list[str]]]:
-        # 同一个地址允许被多个账号分别监控，所以用 address -> user_id -> aliases 的结构。
+        # 同一个地址允许被多个监控菜单分别监控，所以用 address -> menu_id -> aliases 的结构。
         watch_map: dict[str, dict[int, list[str]]] = {}
         for row in wallet_rows:
-            watch_map.setdefault(row.address, {}).setdefault(row.owner_user_id, []).append(row.alias)
+            watch_map.setdefault(row.address, {}).setdefault(row.monitor_menu_id, []).append(row.alias)
         return watch_map
 
     def _extract_actions_sync(
@@ -251,8 +260,10 @@ class SubtensorMonitor:
         event_rows = [self._normalize_event(event, idx) for idx, event in enumerate(events)]
         events_by_extrinsic = self._group_events_by_extrinsic(event_rows)
 
-        threshold_user_ids = {
-            owner_user_id for owner_user_id, profile in profile_map.items() if profile.threshold_tao > 0
+        threshold_menu_ids = {
+            monitor_menu_id
+            for monitor_menu_id, profile in profile_map.items()
+            if profile.menu_kind == BUILTIN_ALERT_KIND and profile.threshold_tao > 0
         }
 
         results: list[ActionRecord] = []
@@ -275,25 +286,29 @@ class SubtensorMonitor:
                 involved_addresses = self._build_involved_addresses(leaf_call, extrinsic_payload["signer_address"])
                 amount_tao = self._estimate_amount_tao(leaf_call, related_events)
                 action_type = self._classify_action_type(leaf_call.pallet, leaf_call.call_name)
-                matched_users = set(threshold_user_ids)
+                matched_menus = set(threshold_menu_ids)
                 for address in involved_addresses:
-                    matched_users.update(watch_map.get(address, {}).keys())
+                    matched_menus.update(watch_map.get(address, {}).keys())
 
-                if not matched_users:
+                if not matched_menus:
                     continue
 
-                for owner_user_id in matched_users:
-                    profile = profile_map.get(owner_user_id)
+                for monitor_menu_id in matched_menus:
+                    profile = profile_map.get(monitor_menu_id)
                     if profile is None:
                         continue
 
                     matched_aliases = self._collect_aliases(
                         watch_map=watch_map,
-                        owner_user_id=owner_user_id,
+                        monitor_menu_id=monitor_menu_id,
                         involved_addresses=involved_addresses,
                     )
                     watched = bool(matched_aliases)
-                    above_threshold = profile.threshold_tao > 0 and amount_tao >= profile.threshold_tao
+                    above_threshold = (
+                        profile.menu_kind == BUILTIN_ALERT_KIND
+                        and profile.threshold_tao > 0
+                        and amount_tao >= profile.threshold_tao
+                    )
                     if not watched and not above_threshold:
                         continue
 
@@ -331,7 +346,9 @@ class SubtensorMonitor:
                     }
                     results.append(
                         ActionRecord(
-                            owner_user_id=owner_user_id,
+                            monitor_menu_id=monitor_menu_id,
+                            owner_user_id=profile.owner_user_id,
+                            menu_name=profile.menu_name,
                             block_number=block_number,
                             event_index=block_action_index,
                             extrinsic_index=extrinsic_index,
@@ -667,13 +684,13 @@ class SubtensorMonitor:
     def _collect_aliases(
         self,
         watch_map: dict[str, dict[int, list[str]]],
-        owner_user_id: int,
+        monitor_menu_id: int,
         involved_addresses: list[str],
     ) -> list[str]:
-        # 同一账号可能监控了多个关联地址，所以这里做一次去重汇总。
+        # 同一监控菜单可能监控了多个关联地址，所以这里做一次去重汇总。
         aliases: list[str] = []
         for address in involved_addresses:
-            aliases.extend(watch_map.get(address, {}).get(owner_user_id, []))
+            aliases.extend(watch_map.get(address, {}).get(monitor_menu_id, []))
         return list(dict.fromkeys(aliases))
 
     def _pick_primary_route(
@@ -760,7 +777,7 @@ class SubtensorMonitor:
             with session_scope() as session:
                 exists = session.scalar(
                     select(ChainEvent).where(
-                        ChainEvent.owner_user_id == action.owner_user_id,
+                        ChainEvent.monitor_menu_id == action.monitor_menu_id,
                         ChainEvent.block_number == action.block_number,
                         ChainEvent.event_index == action.event_index,
                     )
@@ -770,6 +787,7 @@ class SubtensorMonitor:
 
                 row = ChainEvent(
                     owner_user_id=action.owner_user_id,
+                    monitor_menu_id=action.monitor_menu_id,
                     block_number=action.block_number,
                     event_index=action.event_index,
                     extrinsic_index=action.extrinsic_index,
@@ -809,7 +827,7 @@ class SubtensorMonitor:
                 with session_scope() as session:
                     stored = session.scalar(
                         select(ChainEvent).where(
-                            ChainEvent.owner_user_id == action.owner_user_id,
+                            ChainEvent.monitor_menu_id == action.monitor_menu_id,
                             ChainEvent.block_number == action.block_number,
                             ChainEvent.event_index == action.event_index,
                         )

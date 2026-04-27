@@ -24,6 +24,23 @@ class UserNotificationSettingsUpdate(BaseModel):
     telegram_chat_id: str = ""
 
 
+# 新增自定义监控菜单时的表单结构。
+class MonitorMenuCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+
+# 双击改名时的表单结构。
+class MonitorMenuRename(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+
+# 每个监控菜单保存自己独立的 TG 和阈值配置。
+class MonitorMenuSettingsUpdate(BaseModel):
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    large_transfer_threshold_tao: float = Field(default=0, ge=0)
+
+
 # 返回给模板或接口的钱包结构。
 class WalletOut(BaseModel):
     id: int

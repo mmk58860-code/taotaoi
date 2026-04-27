@@ -6,26 +6,45 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
 
-# 钱包监控表：每个后台账号都有自己独立的钱包监控列表。
-class WalletWatch(Base):
-    __tablename__ = "wallet_watches"
-    __table_args__ = (Index("uq_wallet_owner_address", "owner_user_id", "address", unique=True),)
+# 监控菜单表：每个账号可拥有多个监控菜单，每个菜单都有自己的 TG 和阈值配置。
+class MonitorMenu(Base):
+    __tablename__ = "monitor_menus"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     owner_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    menu_kind: Mapped[str] = mapped_column(String(32), default="wallet")
+    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    large_transfer_threshold_tao: Mapped[float] = mapped_column(Float, default=0.0)
+    telegram_bot_token: Mapped[str] = mapped_column(String(256), default="")
+    telegram_chat_id: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# 钱包监控表：每个后台账号下的每个监控菜单都有自己独立的钱包列表。
+class WalletWatch(Base):
+    __tablename__ = "wallet_watches"
+    __table_args__ = (Index("uq_wallet_menu_address", "monitor_menu_id", "address", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    monitor_menu_id: Mapped[int] = mapped_column(Integer, index=True)
     address: Mapped[str] = mapped_column(String(128), index=True)
     alias: Mapped[str] = mapped_column(String(128))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
-# 链上命中事件表：同一笔链上事件可以按账号分别入库，互不干扰。
+# 链上命中事件表：同一笔链上事件可以按监控菜单分别入库，互不干扰。
 class ChainEvent(Base):
     __tablename__ = "chain_events"
-    __table_args__ = (Index("uq_owner_block_event", "owner_user_id", "block_number", "event_index", unique=True),)
+    __table_args__ = (Index("uq_menu_block_event", "monitor_menu_id", "block_number", "event_index", unique=True),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     owner_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    monitor_menu_id: Mapped[int] = mapped_column(Integer, index=True)
     block_number: Mapped[int] = mapped_column(Integer, index=True)
     event_index: Mapped[int] = mapped_column(Integer)
     extrinsic_index: Mapped[int] = mapped_column(Integer, default=0)

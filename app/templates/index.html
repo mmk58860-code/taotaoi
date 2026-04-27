@@ -5,24 +5,6 @@
   <section class="banner {{ level }}">{{ notice }}</section>
   {% endif %}
 
-  <section class="hero hero-wide">
-    <div>
-      <p class="eyebrow">TAO 生态监控台</p>
-      <h1>多账号隔离监控，钱包、阈值、TG 各自独立。</h1>
-      <p class="lede">当前登录账号：{{ current_username }}。每个后台账号都维护自己独立的钱包清单、Telegram 推送和大额阈值。</p>
-    </div>
-    <div class="hero-actions">
-      {% if current_is_superadmin %}
-      <form method="post" action="/monitor/restart">
-        <button class="action" type="submit">重新载入监听</button>
-      </form>
-      {% endif %}
-      <form method="post" action="/logout">
-        <button class="ghost" type="submit">退出登录</button>
-      </form>
-    </div>
-  </section>
-
   <div class="content-shell">
     <div class="workspace-shell">
       <aside class="panel sidebar-nav">
@@ -35,9 +17,20 @@
           {% if current_is_superadmin %}
           <button class="sidebar-link" type="button" data-panel-target="system-panel">系统设置</button>
           {% endif %}
-          <button class="sidebar-link" type="button" data-panel-target="alert-panel">大额预警</button>
-          <button class="sidebar-link" type="button" data-panel-target="wallet-panel">钱包监控</button>
-          <button class="sidebar-link" type="button" data-panel-target="backup-panel">钱包备份</button>
+          {% for menu in monitor_menus %}
+          <button
+            class="sidebar-link monitor-menu-link"
+            type="button"
+            data-panel-target="monitor-menu-{{ menu.id }}"
+            data-menu-id="{{ menu.id }}"
+            data-menu-name="{{ menu.name }}"
+            data-menu-rename-endpoint="/monitor-menus/{{ menu.id }}/rename"
+          >
+            <span class="sidebar-link-text">{{ menu.name }}</span>
+            <input class="sidebar-link-input" type="text" value="{{ menu.name }}" maxlength="128" aria-label="监控菜单名称">
+          </button>
+          {% endfor %}
+          <button class="sidebar-add-link" id="add-monitor-menu" type="button">＋ 新建钱包监控</button>
           {% if current_is_superadmin %}
           <button class="sidebar-link" type="button" data-panel-target="accounts-panel">账号管理</button>
           {% endif %}
@@ -51,6 +44,24 @@
       </aside>
 
       <div class="workspace-content">
+        <section class="hero hero-wide hero-centered">
+          <div class="hero-copy">
+            <p class="eyebrow">TAO 生态监控台</p>
+            <h1>多账号隔离监控，钱包、阈值、TG 各自独立。</h1>
+            <p class="lede">当前登录账号：{{ current_username }}。每个后台账号都维护自己独立的钱包清单、Telegram 推送和大额阈值。</p>
+          </div>
+          <div class="hero-actions hero-actions-stacked">
+            {% if current_is_superadmin %}
+            <form method="post" action="/monitor/restart">
+              <button class="action" type="submit">重新载入监听</button>
+            </form>
+            {% endif %}
+            <form method="post" action="/logout">
+              <button class="ghost" type="submit">退出登录</button>
+            </form>
+          </div>
+        </section>
+
         <section class="workspace-panel is-active" id="overview-panel">
           <section class="grid stats-grid stats-grid-compact">
             <article class="panel stat">
@@ -146,42 +157,71 @@
         </section>
         {% endif %}
 
-        <section class="workspace-panel" id="alert-panel">
+        {% for menu in monitor_menus %}
+        <section class="workspace-panel" id="monitor-menu-{{ menu.id }}">
+          {% set menu_settings = menu_settings_map.get(menu.id, {}) %}
+          {% if menu.menu_kind == 'alert' %}
           <article class="panel">
             <div class="panel-head">
-              <h2>大额预警</h2>
-              <p>每个账号各自维护自己的 Telegram 和大额阈值。阈值填 `0` 可关闭大额监控。</p>
+              <div>
+                <h2>{{ menu.name }}</h2>
+                <p>双击左侧菜单名称可直接改名。这个菜单只负责大额阈值预警，并可绑定自己独立的 Telegram 机器人。</p>
+              </div>
             </div>
-            <form class="stack" method="post" action="/settings/notification">
+            <form class="stack" method="post" action="/monitor-menus/{{ menu.id }}/settings">
               <label>
                 <span>大额阈值（TAO）</span>
-                <input name="large_transfer_threshold_tao" type="number" min="0" step="0.000001" value="{{ user_settings['large_transfer_threshold_tao'] }}" required>
+                <input name="large_transfer_threshold_tao" type="number" min="0" step="0.000001" value="{{ menu_settings.get('large_transfer_threshold_tao', 0) }}" required>
               </label>
               <label>
                 <span>TG Bot Token</span>
-                <input name="telegram_bot_token" value="{{ user_settings['telegram_bot_token'] }}">
+                <input name="telegram_bot_token" value="{{ menu_settings.get('telegram_bot_token', '') }}">
               </label>
               <label>
                 <span>TG Chat ID</span>
-                <input name="telegram_chat_id" value="{{ user_settings['telegram_chat_id'] }}">
+                <input name="telegram_chat_id" value="{{ menu_settings.get('telegram_chat_id', '') }}">
               </label>
               <div class="form-actions">
-                <button class="action" type="submit">保存大额预警设置</button>
+                <button class="action" type="submit">保存 {{ menu.name }} 设置</button>
               </div>
             </form>
-            <form class="inline-form" method="post" action="/settings/test-telegram">
-              <button class="secondary" type="submit">发送当前账号的 Telegram 测试消息</button>
+            <form class="inline-form" method="post" action="/monitor-menus/{{ menu.id }}/test-telegram">
+              <button class="secondary" type="submit">测试 {{ menu.name }} 的 Telegram</button>
             </form>
           </article>
-        </section>
-
-        <section class="workspace-panel" id="wallet-panel">
+          {% else %}
           <article class="panel">
             <div class="panel-head">
-              <h2>钱包监控</h2>
-              <p>这里只会显示当前账号自己的钱包列表。</p>
+              <div>
+                <h2>{{ menu.name }}</h2>
+                <p>双击左侧菜单名称可直接改名。每个钱包监控菜单都拥有自己的 Telegram 机器人和独立钱包列表。</p>
+              </div>
+              {% if not menu.is_builtin %}
+              <form method="post" action="/monitor-menus/{{ menu.id }}/delete" class="inline-form menu-delete-form">
+                <button class="ghost" type="submit">删除这个监控菜单</button>
+              </form>
+              {% endif %}
             </div>
-            <form class="stack" method="post" action="/wallets">
+            <form class="stack" method="post" action="/monitor-menus/{{ menu.id }}/settings">
+              <label>
+                <span>TG Bot Token</span>
+                <input name="telegram_bot_token" value="{{ menu_settings.get('telegram_bot_token', '') }}">
+              </label>
+              <label>
+                <span>TG Chat ID</span>
+                <input name="telegram_chat_id" value="{{ menu_settings.get('telegram_chat_id', '') }}">
+              </label>
+              <div class="form-actions">
+                <button class="action" type="submit">保存 {{ menu.name }} 机器人设置</button>
+              </div>
+            </form>
+            <form class="inline-form" method="post" action="/monitor-menus/{{ menu.id }}/test-telegram">
+              <button class="secondary" type="submit">测试 {{ menu.name }} 的 Telegram</button>
+            </form>
+
+            <div class="menu-divider"></div>
+
+            <form class="stack" method="post" action="/monitor-menus/{{ menu.id }}/wallets">
               <label>
                 <span>钱包地址</span>
                 <input name="address" placeholder="5..." required>
@@ -190,45 +230,118 @@
                 <span>备注别名</span>
                 <input name="alias" placeholder="基金会热钱包" required>
               </label>
-              <button class="action" type="submit">添加钱包</button>
+              <button class="action" type="submit">添加到 {{ menu.name }}</button>
             </form>
+
             <div class="wallet-list">
-              {% for wallet in wallets %}
+              {% for wallet in wallets_by_menu.get(menu.id, []) %}
               <div class="wallet-row {{ 'wallet-disabled' if not wallet.enabled else '' }}">
                 <div>
                   <strong>{{ wallet.alias }}</strong>
                   <p>{{ wallet.address }}</p>
                 </div>
                 <div class="wallet-actions">
-                  <form method="post" action="/wallets/{{ wallet.id }}/toggle">
+                  <form method="post" action="/monitor-menus/{{ menu.id }}/wallets/{{ wallet.id }}/toggle">
                     <button class="{{ 'secondary' if wallet.enabled else 'ghost' }}" type="submit">
                       {{ '暂停监控' if wallet.enabled else '恢复监控' }}
                     </button>
                   </form>
-                  <form method="post" action="/wallets/{{ wallet.id }}/delete">
+                  <form method="post" action="/monitor-menus/{{ menu.id }}/wallets/{{ wallet.id }}/delete">
                     <button class="ghost" type="submit">删除</button>
                   </form>
                 </div>
               </div>
               {% else %}
-              <p class="muted">当前账号还没有添加监控钱包。</p>
+              <p class="muted">这个监控菜单里还没有添加钱包。</p>
               {% endfor %}
             </div>
-          </article>
-        </section>
 
-        <section class="workspace-panel" id="backup-panel">
-          <article class="panel">
-            <div class="panel-head">
-              <h2>钱包备份</h2>
-              <p>网页备份只导出当前账号的钱包地址、备注和开关状态，不包含系统密钥、TG 凭据或其他账号资料。</p>
-            </div>
+            <div class="menu-divider"></div>
+
             <div class="stack">
-              <p class="muted">点击按钮后会由浏览器直接下载 CSV 文件。浏览器无法由服务器强制保存到桌面，但你可以把下载文件保存到桌面或本地任意目录。</p>
-              <a class="action inline-link" href="/backups/wallets/export">下载当前账号的钱包备份</a>
+              <div class="panel-head panel-head-inline">
+                <div>
+                  <h3>资料导入导出</h3>
+                  <p>这里只处理当前监控菜单自己的钱包地址、备注和 TG 机器人信息，不包含其他菜单资料。</p>
+                </div>
+              </div>
+              <div class="import-guide-card">
+                <strong>导入说明</strong>
+                <p>仅支持本系统导出的 JSON 资料包。最稳妥的做法是先从当前系统导出一次，导出的文件本身就是可回导的模板。</p>
+                <ul class="import-guide-list">
+                  <li>导入只作用于当前打开的监控菜单。</li>
+                  <li>相同地址且相同备注会自动跳过。</li>
+                  <li>相同地址但备注不同，会先让你选择保留哪个备注。</li>
+                </ul>
+              </div>
+
+              {% if import_result and import_result['panel'] == 'monitor-menu-' ~ menu.id %}
+              <div class="import-result-card">
+                <div class="import-result-head">
+                  <strong>导入完成</strong>
+                  <span>当前菜单：{{ menu.name }}</span>
+                </div>
+                <div class="import-result-stats">
+                  <div class="import-stat">
+                    <span>新增</span>
+                    <strong>{{ import_result['created'] }}</strong>
+                  </div>
+                  <div class="import-stat">
+                    <span>更新备注</span>
+                    <strong>{{ import_result['updated'] }}</strong>
+                  </div>
+                  <div class="import-stat">
+                    <span>跳过重复</span>
+                    <strong>{{ import_result['skipped'] }}</strong>
+                  </div>
+                </div>
+              </div>
+              {% endif %}
+
+              <a class="action inline-link" href="/monitor-menus/{{ menu.id }}/data-transfer/export">导出 {{ menu.name }} 资料</a>
+              <form class="stack" method="post" action="/monitor-menus/{{ menu.id }}/data-transfer/import-preview" enctype="multipart/form-data">
+                <label>
+                  <span>选择导入文件</span>
+                  <input name="import_file" type="file" accept=".json,application/json" required>
+                </label>
+                <button class="secondary" type="submit">导入资料</button>
+              </form>
+
+              {% if active_import_preview and active_import_preview['menu_id'] == menu.id %}
+              {% set preview_payload = active_import_preview['payload'] %}
+              {% set preview_data = preview_payload['preview'] %}
+              {% if preview_data['conflicts'] %}
+              <form class="stack import-conflicts" method="post" action="/monitor-menus/{{ menu.id }}/data-transfer/import-apply">
+                <div class="banner error">
+                  检测到 {{ preview_data['conflicts']|length }} 个备注冲突，请选择每个地址保留哪个备注后再确认导入。
+                </div>
+                <input type="hidden" name="import_token" value="{{ active_import_token }}">
+                {% for conflict in preview_data['conflicts'] %}
+                <div class="import-conflict-card">
+                  <strong>{{ conflict['address'] }}</strong>
+                  <div class="import-conflict-options">
+                    <label class="import-choice">
+                      <input type="radio" name="conflict_choice_{{ loop.index0 }}" value="keep_existing" checked>
+                      <span>保留当前备注：{{ conflict['existing_alias'] }}</span>
+                    </label>
+                    <label class="import-choice">
+                      <input type="radio" name="conflict_choice_{{ loop.index0 }}" value="use_imported">
+                      <span>使用导入备注：{{ conflict['imported_alias'] }}</span>
+                    </label>
+                  </div>
+                </div>
+                {% endfor %}
+                <div class="form-actions">
+                  <button class="action" type="submit">确认导入并处理冲突</button>
+                </div>
+              </form>
+              {% endif %}
+              {% endif %}
             </div>
           </article>
+          {% endif %}
         </section>
+        {% endfor %}
 
         {% if current_is_superadmin %}
         <section class="workspace-panel" id="accounts-panel">

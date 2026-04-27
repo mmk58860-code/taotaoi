@@ -58,6 +58,7 @@ function wireWorkspaceNav() {
   const menuButtons = Array.from(document.querySelectorAll(".sidebar-link"));
   const panels = Array.from(document.querySelectorAll(".workspace-panel"));
   if (!menuButtons.length || !panels.length) return;
+  const storageKey = "tao-monitor-active-panel";
 
   function activatePanel(panelId) {
     menuButtons.forEach((button) => {
@@ -66,15 +67,26 @@ function wireWorkspaceNav() {
     panels.forEach((panel) => {
       panel.classList.toggle("is-active", panel.id === panelId);
     });
+    const url = new URL(window.location.href);
+    url.searchParams.set("panel", panelId);
+    window.history.replaceState({}, "", url);
+    localStorage.setItem(storageKey, panelId);
   }
 
   menuButtons.forEach((button) => {
     button.addEventListener("click", () => {
+      if (button.classList.contains("is-editing")) return;
       activatePanel(button.dataset.panelTarget);
     });
   });
 
-  const initiallyActive = menuButtons.find((button) => button.classList.contains("is-active")) || menuButtons[0];
+  const requestedPanel = new URLSearchParams(window.location.search).get("panel");
+  const rememberedPanel = localStorage.getItem(storageKey);
+  const initiallyActive =
+    menuButtons.find((button) => button.dataset.panelTarget === requestedPanel) ||
+    menuButtons.find((button) => button.dataset.panelTarget === rememberedPanel) ||
+    menuButtons.find((button) => button.classList.contains("is-active")) ||
+    menuButtons[0];
   if (initiallyActive) {
     activatePanel(initiallyActive.dataset.panelTarget);
   }
@@ -105,9 +117,124 @@ function wireThemeToggle() {
   });
 }
 
+function wireMonitorMenuEditing() {
+  // 双击左侧监控菜单时，直接在菜单里内联编辑名称。
+  document.querySelectorAll(".monitor-menu-link").forEach((button) => {
+    const text = button.querySelector(".sidebar-link-text");
+    const input = button.querySelector(".sidebar-link-input");
+    if (!text || !input) return;
+
+    let originalName = button.dataset.menuName || text.textContent.trim();
+
+    async function finishEditing(save) {
+      if (!button.classList.contains("is-editing")) return;
+      button.classList.remove("is-editing");
+      const trimmed = input.value.trim();
+      if (!save || !trimmed) {
+        input.value = originalName;
+        return;
+      }
+      if (trimmed === originalName) return;
+
+      const formData = new FormData();
+      formData.set("name", trimmed);
+      const response = await fetch(button.dataset.menuRenameEndpoint, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        window.alert("修改名称失败，请稍后重试。");
+        input.value = originalName;
+        return;
+      }
+
+      originalName = trimmed;
+      button.dataset.menuName = trimmed;
+      text.textContent = trimmed;
+      input.value = trimmed;
+    }
+
+    button.addEventListener("dblclick", () => {
+      button.classList.add("is-editing");
+      input.value = originalName;
+      window.setTimeout(() => {
+        input.focus();
+        input.select();
+      }, 0);
+    });
+
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("dblclick", (event) => event.stopPropagation());
+    input.addEventListener("blur", () => {
+      finishEditing(true);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finishEditing(true);
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finishEditing(false);
+      }
+    });
+  });
+}
+
+function wireAddMonitorMenu() {
+  // 左侧加号按钮用于创建新的自定义钱包监控菜单。
+  const addButton = document.getElementById("add-monitor-menu");
+  if (!addButton) return;
+
+  addButton.addEventListener("click", async () => {
+    const menuName = window.prompt("请输入新监控菜单名称", "新钱包监控");
+    if (!menuName) return;
+    const trimmed = menuName.trim();
+    if (!trimmed) return;
+
+    const formData = new FormData();
+    formData.set("name", trimmed);
+    const response = await fetch("/monitor-menus", {
+      method: "POST",
+      body: formData,
+    });
+    if (!response.ok) {
+      window.alert("创建监控菜单失败，请稍后重试。");
+      return;
+    }
+    const data = await response.json();
+    const targetPanel = data.menu_id ? `monitor-menu-${data.menu_id}` : "overview-panel";
+    const url = new URL(window.location.href);
+    url.searchParams.set("panel", targetPanel);
+    localStorage.setItem("tao-monitor-active-panel", targetPanel);
+    window.location.href = url.toString();
+  });
+}
+
+function wirePanelAwareForms() {
+  // 所有右侧详情面板里的表单提交时都带上当前面板 id，提交后还能回到原面板。
+  document.querySelectorAll(".workspace-panel form").forEach((form) => {
+    form.addEventListener("submit", () => {
+      const activePanel = document.querySelector(".workspace-panel.is-active");
+      if (!activePanel) return;
+      let hiddenInput = form.querySelector('input[name="next_panel"]');
+      if (!hiddenInput) {
+        hiddenInput = document.createElement("input");
+        hiddenInput.type = "hidden";
+        hiddenInput.name = "next_panel";
+        form.appendChild(hiddenInput);
+      }
+      hiddenInput.value = activePanel.id;
+    });
+  });
+}
+
 // 页面加载后立即刷新一次，再按固定间隔轮询。
 window.setInterval(refreshState, 10000);
 refreshState();
 wireEventModal();
 wireWorkspaceNav();
 wireThemeToggle();
+wireMonitorMenuEditing();
+wireAddMonitorMenu();
+wirePanelAwareForms();
