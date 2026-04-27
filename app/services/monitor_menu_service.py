@@ -29,16 +29,12 @@ def bootstrap_monitor_menus(session: Session, owner_user_id: int) -> list[Monito
         sort_order=30,
         threshold_tao=0.0,
     )
-    return list_monitor_menus(session, owner_user_id)
+    return _query_monitor_menus(session, owner_user_id)
 
 
 def list_monitor_menus(session: Session, owner_user_id: int) -> list[MonitorMenu]:
     bootstrap_monitor_menus(session, owner_user_id)
-    return session.scalars(
-        select(MonitorMenu)
-        .where(MonitorMenu.owner_user_id == owner_user_id)
-        .order_by(MonitorMenu.sort_order.asc(), MonitorMenu.created_at.asc(), MonitorMenu.id.asc())
-    ).all()
+    return _query_monitor_menus(session, owner_user_id)
 
 
 def get_monitor_menu(session: Session, owner_user_id: int, menu_id: int) -> MonitorMenu | None:
@@ -173,3 +169,12 @@ def _ensure_builtin_menu(
         session.add(row)
         session.flush()
     return row
+
+
+def _query_monitor_menus(session: Session, owner_user_id: int) -> list[MonitorMenu]:
+    # 纯查询函数，不做初始化，避免和 bootstrap 之间相互递归。
+    return session.scalars(
+        select(MonitorMenu)
+        .where(MonitorMenu.owner_user_id == owner_user_id)
+        .order_by(MonitorMenu.sort_order.asc(), MonitorMenu.created_at.asc(), MonitorMenu.id.asc())
+    ).all()
