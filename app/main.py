@@ -237,6 +237,15 @@ def action_label(event: ChainEvent) -> str:
     return label
 
 
+def block_label(event: ChainEvent) -> str:
+    # 区块后面带 extrinsic 序号；batch 内部多笔再追加 leaf 序号，避免同块交易看起来像同一笔。
+    leaf_index = int(event.event_index or 0) % 1000
+    base = f"{event.block_number}-{int(event.extrinsic_index or 0):04d}"
+    if leaf_index:
+        return f"{base}-{leaf_index:02d}"
+    return base
+
+
 def event_trade_signal(event: ChainEvent) -> dict[str, object]:
     # 不改数据库结构，直接从原始链上参数里提取短线交易需要看的字段。
     normalized_amount = normalized_trade_amount_tao(event)
@@ -307,18 +316,20 @@ def normalized_trade_amount_tao(event: ChainEvent) -> float:
     if action_type in {"weights_set", "weights_commit", "weights_reveal", "children_set", "identity_set"}:
         return 0.0
 
+    if action_type == "stake_add":
+        # 页面历史也按当前调用自己的金额拆单，避免同块/同 batch 的多笔买入被合成一笔。
+        candidates = collect_amount_candidates(
+            params,
+            include_generic_amount=True,
+            include_stake_amount=True,
+        )
+        if candidates:
+            return round(max(candidates) / 1_000_000_000, 9)
+
     candidates = collect_settlement_tao_from_events(action_type, related_events)
     candidates.extend(collect_balance_tao_from_events(action_type, related_events))
     if action_type == "transfer":
         candidates.extend(collect_amount_candidates(params, include_generic_amount=True))
-    elif action_type == "stake_add":
-        candidates.extend(
-            collect_amount_candidates(
-                params,
-                include_generic_amount=True,
-                include_stake_amount=True,
-            )
-        )
     elif action_type in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
         if isinstance(related_events, list):
             for related_event in related_events:
@@ -586,6 +597,7 @@ def to_int(value) -> int | None:
 
 # 把页面常用函数注册成模板全局函数，避免某个渲染入口漏传后导致后台 500。
 templates.env.globals["event_trade_signal"] = event_trade_signal
+templates.env.globals["block_label"] = block_label
 
 
 def parse_menu_data_import(file_bytes: bytes) -> dict[str, object]:
@@ -983,7 +995,7 @@ async def api_state(request: Request) -> JSONResponse:
                     "id": row.id,
                     "block_number": row.block_number,
                     "extrinsic_index": row.extrinsic_index,
-                    "block_label": f"{row.block_number}-{row.extrinsic_index:04d}",
+                    "block_label": block_label(row),
                     "action": action_label(row),
                     "amount_label": event_trade_signal(row)["amount_label"],
                     "trade_signal": event_trade_signal(row),

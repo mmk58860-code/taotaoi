@@ -716,11 +716,8 @@ class SubtensorMonitor:
             return 0.0
 
         amount_candidates: list[int] = []
-        amount_candidates.extend(self._collect_settlement_tao_from_events(action_type, related_events))
-        amount_candidates.extend(self._collect_balance_tao_from_events(action_type, related_events))
-        if action_type == "transfer":
-            amount_candidates.extend(self._collect_amount_candidates(leaf_call.params, include_generic_amount=True))
-        elif action_type == "stake_add":
+        if action_type == "stake_add":
+            # 买入加仓可能在同一个区块或同一个 batch 里出现多笔，优先用当前叶子调用自己的金额拆单。
             amount_candidates.extend(
                 self._collect_amount_candidates(
                     leaf_call.params,
@@ -728,6 +725,13 @@ class SubtensorMonitor:
                     include_stake_amount=True,
                 )
             )
+            if amount_candidates:
+                return round(max(amount_candidates) / RAO_PER_TAO, 9)
+
+        amount_candidates.extend(self._collect_settlement_tao_from_events(action_type, related_events))
+        amount_candidates.extend(self._collect_balance_tao_from_events(action_type, related_events))
+        if action_type == "transfer":
+            amount_candidates.extend(self._collect_amount_candidates(leaf_call.params, include_generic_amount=True))
         elif action_type in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
             for event in related_events:
                 amount_candidates.extend(self._collect_tao_amount_candidates(event.attributes))
