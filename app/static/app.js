@@ -6,11 +6,13 @@ async function refreshState() {
     const data = await response.json();
     const status = document.getElementById("monitor-status");
     const head = document.getElementById("last-seen-head");
+    const scanned = document.getElementById("last-scanned-block");
     const error = document.getElementById("monitor-error");
     const server = document.getElementById("server-online");
     const walletActive = document.getElementById("wallet-active");
     if (status) status.textContent = data.monitor_status;
     if (head) head.textContent = data.last_seen_head;
+    if (scanned) scanned.textContent = `最近扫描区块 ${data.last_scanned_block ?? 0}`;
     if (error) error.textContent = data.last_error || "监听正常";
     if (server) server.textContent = data.server_online ? "服务器在线" : "服务器离线";
     if (walletActive) walletActive.textContent = `启用中 ${data.active_wallet_count ?? 0}`;

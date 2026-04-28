@@ -67,12 +67,12 @@
             <article class="panel stat">
               <span>服务状态</span>
               <strong id="monitor-status">{{ state.monitor_status }}</strong>
-              <small>最近扫描区块 {{ state.last_scanned_block }}</small>
+              <small id="last-scanned-block">最近扫描区块 {{ state.last_scanned_block }}</small>
             </article>
             <article class="panel stat">
               <span>链上头部</span>
               <strong id="last-seen-head">{{ state.last_seen_head }}</strong>
-              <small>finalized head</small>
+              <small>最新可见块，优先快速监听</small>
             </article>
             <article class="panel stat">
               <span>我的监控钱包</span>
