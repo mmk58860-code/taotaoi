@@ -283,6 +283,11 @@ def extract_subnet_ids(payload) -> list[int]:
     subnet_keys = ("netuid", "subnet", "network", "destination_netuid", "origin_netuid")
 
     if isinstance(payload, dict):
+        param_name = str(payload.get("name", payload.get("param", ""))).lower()
+        if any(token in param_name for token in subnet_keys):
+            parsed = to_int(payload.get("value"))
+            if parsed is not None and 0 <= parsed <= 10_000:
+                results.append(parsed)
         for key, value in payload.items():
             key_text = str(key).lower()
             if any(token in key_text for token in subnet_keys):

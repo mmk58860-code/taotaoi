@@ -946,6 +946,11 @@ class SubtensorMonitor:
         subnet_keys = ("netuid", "subnet", "network", "destination_netuid", "origin_netuid")
 
         if isinstance(normalized, dict):
+            param_name = str(normalized.get("name", normalized.get("param", ""))).lower()
+            if any(token in param_name for token in subnet_keys):
+                parsed = self._to_int(normalized.get("value"))
+                if parsed is not None and 0 <= parsed <= 10_000:
+                    results.append(parsed)
             for key, value in normalized.items():
                 key_text = str(key).lower()
                 if any(token in key_text for token in subnet_keys):
