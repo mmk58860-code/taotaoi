@@ -578,12 +578,14 @@ class SubtensorMonitor:
         if not isinstance(raw_payload, dict):
             raw_payload = {"value": raw_payload}
         phase = raw_payload.get("phase")
+        event_payload = raw_payload.get("event")
+        event_source = event_payload if isinstance(event_payload, dict) else raw_payload
         return EventEnvelope(
             event_index=event_index,
             extrinsic_index=self._parse_phase_index(phase),
-            pallet=self._pick_string(raw_payload, ("module_id", "module", "pallet")) or "Unknown",
-            event_name=self._pick_string(raw_payload, ("event_id", "event", "name")) or "unknown_event",
-            attributes=raw_payload.get("attributes", raw_payload.get("params", {})),
+            pallet=self._pick_string(event_source, ("module_id", "module", "pallet")) or "Unknown",
+            event_name=self._pick_string(event_source, ("event_id", "event", "name")) or "unknown_event",
+            attributes=event_source.get("attributes", event_source.get("params", {})),
             payload=raw_payload,
         )
 

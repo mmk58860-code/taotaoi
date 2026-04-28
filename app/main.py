@@ -413,6 +413,9 @@ def collect_named_settlement_amounts(payload) -> list[int]:
             value = payload.get(key)
             if isinstance(value, dict):
                 results.extend(collect_named_settlement_amounts(value))
+        nested_event = payload.get("event")
+        if isinstance(nested_event, dict):
+            results.extend(collect_named_settlement_amounts(nested_event))
     return results
 
 
@@ -431,6 +434,9 @@ def event_name_from_payload(payload) -> str:
 
 def event_attribute_values(payload) -> list:
     if isinstance(payload, dict):
+        nested_event = payload.get("event")
+        if isinstance(nested_event, dict):
+            return event_attribute_values(nested_event)
         for key in ("attributes", "params", "args", "data", "values"):
             value = payload.get(key)
             if isinstance(value, list):
