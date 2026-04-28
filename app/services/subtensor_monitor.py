@@ -904,7 +904,7 @@ class SubtensorMonitor:
     def _build_trade_signal(self, action_type: str, amount_tao: float, params: Any) -> dict[str, str]:
         # 把底层链上动作翻译成更接近短线交易判断的中文信号。
         subnet_ids = self._extract_subnet_ids(params)
-        subnet_label = "未知" if not subnet_ids else "、".join(f"子网 {netuid}" for netuid in subnet_ids[:3])
+        subnet_label = self._subnet_label_for_action(action_type, subnet_ids)
         direction_map = {
             "stake_add": "买入 / 加仓",
             "stake_remove": "卖出 / 减仓",
@@ -938,6 +938,14 @@ class SubtensorMonitor:
             "direction": direction,
             "signal": signal,
         }
+
+    def _subnet_label_for_action(self, action_type: str, subnet_ids: list[int]) -> str:
+        # 余额普通转账本身不带子网字段，显示“无子网字段”比“未知”更准确。
+        if subnet_ids:
+            return "、".join(f"子网 {netuid}" for netuid in subnet_ids[:3])
+        if action_type == "transfer":
+            return "无子网字段"
+        return "未知"
 
     def _extract_subnet_ids(self, payload: Any) -> list[int]:
         # 常见字段包括 netuid、subnet、network，递归提取后去重。

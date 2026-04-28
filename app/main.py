@@ -252,9 +252,9 @@ def event_trade_signal(event: ChainEvent) -> dict[str, str]:
         raw = json.loads(event.raw_payload or "{}")
         params = raw.get("leaf_call", raw) if isinstance(raw, dict) else raw
         subnet_ids = extract_subnet_ids(params)
-        subnet_label = "未知子网" if not subnet_ids else "、".join(f"子网 {netuid}" for netuid in subnet_ids[:3])
+        subnet_label = subnet_label_for_action(event.action_type, subnet_ids)
     except Exception:
-        subnet_label = "未知子网"
+        subnet_label = subnet_label_for_action(event.action_type, [])
 
     if event.action_type in {"stake_add", "stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
         if event.amount_tao >= 100:
@@ -275,6 +275,15 @@ def event_trade_signal(event: ChainEvent) -> dict[str, str]:
         "direction": direction,
         "signal": signal,
     }
+
+
+def subnet_label_for_action(action_type: str, subnet_ids: list[int]) -> str:
+    # 余额普通转账本身不带子网字段，显示“无子网字段”比“未知”更准确。
+    if subnet_ids:
+        return "、".join(f"子网 {netuid}" for netuid in subnet_ids[:3])
+    if action_type == "transfer":
+        return "无子网字段"
+    return "未知子网"
 
 
 def extract_subnet_ids(payload) -> list[int]:
