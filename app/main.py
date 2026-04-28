@@ -7,6 +7,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -52,7 +53,7 @@ from app.services.settings_service import (
     get_system_runtime_settings,
     update_system_runtime_settings,
 )
-from app.services.subtensor_monitor import SubtensorMonitor, ensure_state
+from app.services.subtensor_monitor import ACTION_TITLES, SubtensorMonitor, ensure_state
 from app.services.telegram import TelegramNotifier
 
 
@@ -65,6 +66,7 @@ notifier = TelegramNotifier()
 app_settings = get_settings()
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
 IMPORT_EXPORT_FORMAT_VERSION = 1
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 
 @asynccontextmanager
@@ -164,7 +166,7 @@ def build_wallet_backup_csv(wallets: list[WalletWatch]) -> bytes:
                 wallet.alias,
                 wallet.address,
                 "启用" if wallet.enabled else "暂停",
-                wallet.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                to_beijing_string(wallet.created_at),
             ]
         )
     return buffer.getvalue().encode("utf-8-sig")
@@ -181,7 +183,7 @@ def build_menu_data_export(menu: MonitorMenu, wallets: list[WalletWatch], userna
     # 导出当前监控菜单的钱包地址、备注和 TG 机器人信息，便于后续导入恢复。
     payload = {
         "format_version": IMPORT_EXPORT_FORMAT_VERSION,
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": to_beijing_iso(datetime.utcnow()),
         "exported_by": username,
         "menu": {
             "name": menu.name,
@@ -199,6 +201,36 @@ def build_menu_data_export(menu: MonitorMenu, wallets: list[WalletWatch], userna
         ],
     }
     return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def to_beijing_time(dt: datetime | None) -> datetime:
+    # 数据库存的是 UTC 风格时间，这里统一转成北京时间给页面和导出使用。
+    if dt is None:
+        return datetime.now(BEIJING_TZ)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return dt.astimezone(BEIJING_TZ)
+
+
+def to_beijing_string(dt: datetime | None) -> str:
+    # 页面展示统一格式化成北京时间字符串。
+    return to_beijing_time(dt).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def to_beijing_iso(dt: datetime | None) -> str:
+    # 给接口返回 ISO 字符串时也统一转北京时间，避免前后不一致。
+    return to_beijing_time(dt).isoformat()
+
+
+def action_label(event: ChainEvent) -> str:
+    # 服务概览里优先显示中文动作名；没有映射时再回退到原始调用名。
+    label = ACTION_TITLES.get(event.action_type, "")
+    if not label:
+        raw_name = event.call_name or event.event_name or event.action_type or "未知动作"
+        label = f"{event.pallet}.{raw_name}"
+    if not event.success:
+        return f"{label}（失败）"
+    return label
 
 
 def parse_menu_data_import(file_bytes: bytes) -> dict[str, object]:
@@ -533,6 +565,8 @@ async def dashboard(request: Request):
             "level": request.query_params.get("level", "success"),
             "current_username": request.session.get("username", ""),
             "current_is_superadmin": is_superadmin(request),
+            "to_beijing_string": to_beijing_string,
+            "action_label": action_label,
         },
     )
 
@@ -586,7 +620,7 @@ async def api_state(request: Request) -> JSONResponse:
                     "block_number": row.block_number,
                     "amount_tao": row.amount_tao,
                     "message": row.message,
-                    "detected_at": row.detected_at.isoformat(),
+                    "detected_at": to_beijing_iso(row.detected_at),
                 }
                 for row in latest
             ],

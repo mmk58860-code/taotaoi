@@ -99,14 +99,14 @@ body {
 }
 
 .content-shell {
-  width: min(1360px, 100%);
+  width: min(1540px, calc(100vw - 24px));
   margin: 0 auto;
 }
 
 .workspace-shell {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 22px;
   margin-top: 18px;
   align-items: start;
 }
@@ -149,7 +149,7 @@ body {
   flex-direction: column;
   min-height: min(720px, calc(100vh - 40px));
   background: var(--sidebar-panel);
-  margin-left: 0;
+  margin-left: -6px;
 }
 
 .sidebar-head h2 {
@@ -507,6 +507,20 @@ small {
   color: #ffd0a8;
 }
 
+html[data-theme="light"] .banner.success {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(34, 199, 183, 0.42);
+  color: #0f766e;
+  box-shadow: 0 10px 24px rgba(34, 199, 183, 0.08);
+}
+
+html[data-theme="light"] .banner.error {
+  background: rgba(255, 247, 242, 0.96);
+  border-color: rgba(240, 141, 87, 0.42);
+  color: #b45309;
+  box-shadow: 0 10px 24px rgba(240, 141, 87, 0.08);
+}
+
 .grid {
   display: grid;
   gap: 18px;
@@ -660,12 +674,13 @@ input {
 
 .event-head,
 .event-row {
-  grid-template-columns: 100px 180px 140px minmax(0, 1fr) 160px;
+  grid-template-columns: 96px minmax(240px, 1.15fr) minmax(170px, 0.8fr) minmax(420px, 1.9fr) 190px;
 }
 
 .event-head {
   color: var(--muted);
   padding-bottom: 12px;
+  align-items: end;
 }
 
 .event-row {
@@ -673,10 +688,44 @@ input {
   border-top: 1px solid rgba(148, 163, 184, 0.12);
   font-size: 0.95rem;
   cursor: pointer;
+  align-items: start;
 }
 
 .event-row:hover {
   background: var(--row-hover);
+}
+
+.event-col-block,
+.event-col-action,
+.event-col-amount,
+.event-col-route,
+.event-col-time {
+  min-width: 0;
+}
+
+.event-col-action {
+  line-height: 1.45;
+}
+
+.event-col-amount {
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.event-col-route {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.route-line {
+  display: block;
+}
+
+.event-col-time {
+  white-space: nowrap;
+  text-align: right;
+  justify-self: end;
 }
 
 .modal-shell {

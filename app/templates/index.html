@@ -93,29 +93,32 @@
             </div>
             <div class="event-table">
               <div class="event-head">
-                <span>区块</span>
-                <span>动作</span>
-                <span>金额估值</span>
-                <span>签名者 / 主路径</span>
-                <span>时间</span>
+                <span class="event-col-block">区块</span>
+                <span class="event-col-action">动作</span>
+                <span class="event-col-amount">金额估值</span>
+                <span class="event-col-route">签名者 / 主路径</span>
+                <span class="event-col-time">时间</span>
               </div>
               <div id="event-rows">
                 {% for event in events %}
                 <article
                   class="event-row"
                   data-block="{{ event.block_number }}"
-                  data-event="{{ event.action_type or event.call_name or event.event_name }}"
+                  data-event="{{ action_label(event) }}"
                   data-amount="{{ '%.6f'|format(event.amount_tao) }} TAO"
                   data-route="{{ (event.signer_address or '-') ~ ' / ' ~ ((event.from_address or '-') ~ ' -> ' ~ (event.to_address or '-')) }}"
-                  data-time="{{ event.detected_at.strftime('%Y-%m-%d %H:%M:%S') }}"
+                  data-time="{{ to_beijing_string(event.detected_at) }}"
                   data-message="{{ event.message }}"
                   data-raw="{{ event.raw_payload }}"
                 >
-                  <span>#{{ event.block_number }}</span>
-                  <span>{{ event.pallet }}.{{ event.call_name or event.event_name }}{% if not event.success %}（失败）{% endif %}</span>
-                  <span>{{ "%.6f"|format(event.amount_tao) }} TAO</span>
-                  <span>{{ event.signer_address or "-" }} / {{ event.from_address or "-" }} -> {{ event.to_address or "-" }}</span>
-                  <span>{{ event.detected_at.strftime("%Y-%m-%d %H:%M:%S") }}</span>
+                  <span class="event-col-block">#{{ event.block_number }}</span>
+                  <span class="event-col-action">{{ action_label(event) }}</span>
+                  <span class="event-col-amount">{{ "%.6f"|format(event.amount_tao) }} TAO</span>
+                  <span class="event-col-route">
+                    <span class="route-line">{{ event.signer_address or "-" }}</span>
+                    <span class="route-line">{{ event.from_address or "-" }} -> {{ event.to_address or "-" }}</span>
+                  </span>
+                  <span class="event-col-time">{{ to_beijing_string(event.detected_at) }}</span>
                 </article>
                 {% else %}
                 <p class="muted">当前账号还没有命中动作。</p>
