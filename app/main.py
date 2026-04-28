@@ -920,10 +920,14 @@ async def api_state(request: Request) -> JSONResponse:
                     "id": row.id,
                     "block_number": row.block_number,
                     "action": action_label(row),
-                    "amount_tao": event_trade_signal(row)["amount_tao"],
+                    "amount_label": event_trade_signal(row)["amount_label"],
                     "trade_signal": event_trade_signal(row),
+                    "signer_address": row.signer_address or "-",
+                    "from_address": row.from_address or "-",
+                    "to_address": row.to_address or "-",
                     "message": row.message,
-                    "detected_at": to_beijing_iso(row.detected_at),
+                    "raw_payload": row.raw_payload,
+                    "detected_at": to_beijing_string(row.detected_at),
                 }
                 for row in latest
             ],

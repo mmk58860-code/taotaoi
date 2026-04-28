@@ -10,15 +10,70 @@ async function refreshState() {
     const error = document.getElementById("monitor-error");
     const server = document.getElementById("server-online");
     const walletActive = document.getElementById("wallet-active");
+    const eventTotal = document.getElementById("event-total");
     if (status) status.textContent = data.monitor_status;
     if (head) head.textContent = data.last_seen_head;
     if (scanned) scanned.textContent = `最近扫描区块 ${data.last_scanned_block ?? 0}`;
     if (error) error.textContent = data.last_error || "监听正常";
     if (server) server.textContent = data.server_online ? "服务器在线" : "服务器离线";
     if (walletActive) walletActive.textContent = `启用中 ${data.active_wallet_count ?? 0}`;
+    if (eventTotal) eventTotal.textContent = data.event_count ?? 0;
+    refreshEventRows(data.events || []);
   } catch (err) {
     console.error(err);
   }
+}
+
+function refreshEventRows(events) {
+  // 最近命中动作也跟着状态接口刷新，避免还要手动刷新页面才能看到新命中。
+  const container = document.getElementById("event-rows");
+  if (!container) return;
+  if (!events.length) {
+    container.innerHTML = '<p class="muted">当前账号还没有命中动作。</p>';
+    return;
+  }
+
+  container.innerHTML = events.map((event) => {
+    const trade = event.trade_signal || {};
+    const routeText = `${trade.subnet || "-"} / ${trade.direction || "-"} / ${(event.from_address || "-")} -> ${(event.to_address || "-")}`;
+    return `
+      <article
+        class="event-row"
+        data-block="${escapeHtml(event.block_number)}"
+        data-event="${escapeHtml(event.action)}"
+        data-amount="${escapeHtml(event.amount_label || "0.000000 TAO")}"
+        data-route="${escapeHtml(routeText)}"
+        data-time="${escapeHtml(event.detected_at || "-")}"
+        data-message="${escapeHtml(event.message || "")}"
+        data-raw="${escapeHtml(event.raw_payload || "")}"
+      >
+        <span class="event-col-block">#${escapeHtml(event.block_number)}</span>
+        <span class="event-col-action">
+          <span class="signal-main">${escapeHtml(event.action)}</span>
+          <span class="signal-sub">${escapeHtml(trade.direction || "-")}</span>
+        </span>
+        <span class="event-col-amount">
+          <span class="amount-main">${escapeHtml(event.amount_label || "0.000000 TAO")}</span>
+          <span class="signal-sub">${escapeHtml(trade.subnet || "-")}</span>
+        </span>
+        <span class="event-col-route">
+          <span class="signal-badge">${escapeHtml(trade.signal || "-")}</span>
+          <span class="route-line">${escapeHtml(event.signer_address || "-")}</span>
+          <span class="route-line">${escapeHtml(event.from_address || "-")} -> ${escapeHtml(event.to_address || "-")}</span>
+        </span>
+        <span class="event-col-time">${escapeHtml(event.detected_at || "-")}</span>
+      </article>
+    `;
+  }).join("");
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 function wireEventModal() {
@@ -42,8 +97,9 @@ function wireEventModal() {
     modal.classList.remove("hidden");
   }
 
-  document.querySelectorAll(".event-row").forEach((row) => {
-    row.addEventListener("click", () => showModal(row));
+  document.getElementById("event-rows")?.addEventListener("click", (event) => {
+    const row = event.target.closest(".event-row");
+    if (row) showModal(row);
   });
 
   close.addEventListener("click", hideModal);
