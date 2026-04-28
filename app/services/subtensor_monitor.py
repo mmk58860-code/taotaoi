@@ -1141,7 +1141,7 @@ class SubtensorMonitor:
         if not actions:
             return
 
-        for action in actions:
+        for action in self._dedupe_actions_for_owner(actions):
             with session_scope() as session:
                 exists = self._find_existing_event(session, action)
                 if exists:
@@ -1191,6 +1191,38 @@ class SubtensorMonitor:
                     if stored:
                         stored.notification_sent = True
 
+    def _dedupe_actions_for_owner(self, actions: list[ActionRecord]) -> list[ActionRecord]:
+        # 同一笔链上动作可能同时命中“大额预警”和“钱包监控”，同一账号只保留一条，避免页面和 TG 重复。
+        deduped: dict[tuple[Any, ...], ActionRecord] = {}
+        for action in actions:
+            key = self._owner_event_key(action)
+            current = deduped.get(key)
+            if current is None or self._action_priority(action) > self._action_priority(current):
+                deduped[key] = action
+        return list(deduped.values())
+
+    def _owner_event_key(self, action: ActionRecord) -> tuple[Any, ...]:
+        return (
+            action.owner_user_id,
+            action.block_number,
+            action.extrinsic_index,
+            action.event_index,
+            action.action_type,
+            action.call_name,
+            action.amount_tao,
+            action.signer_address,
+            action.from_address,
+            action.to_address,
+        )
+
+    def _action_priority(self, action: ActionRecord) -> int:
+        # 钱包命中的信息更有上下文，其次是有 TG 的大额预警，最后只是普通入库。
+        if action.should_notify:
+            return 40 if action.matched_aliases else 30
+        if action.matched_aliases:
+            return 20
+        return 10
+
     def _find_existing_event(self, session: Any, action: ActionRecord) -> ChainEvent | None:
         # 快速监听和 finalized 校正会重复扫描同一个区块；这里用稳定身份防止重复入库和重复 TG。
         exact = session.scalar(
@@ -1203,11 +1235,28 @@ class SubtensorMonitor:
         if exact:
             return exact
 
-        return session.scalar(
+        same_menu = session.scalar(
             select(ChainEvent).where(
                 ChainEvent.monitor_menu_id == action.monitor_menu_id,
                 ChainEvent.block_number == action.block_number,
                 ChainEvent.extrinsic_index == action.extrinsic_index,
+                ChainEvent.action_type == action.action_type,
+                ChainEvent.call_name == action.call_name,
+                ChainEvent.amount_tao == action.amount_tao,
+                ChainEvent.signer_address == action.signer_address,
+                ChainEvent.from_address == action.from_address,
+                ChainEvent.to_address == action.to_address,
+            )
+        )
+        if same_menu:
+            return same_menu
+
+        return session.scalar(
+            select(ChainEvent).where(
+                ChainEvent.owner_user_id == action.owner_user_id,
+                ChainEvent.block_number == action.block_number,
+                ChainEvent.extrinsic_index == action.extrinsic_index,
+                ChainEvent.event_index == action.event_index,
                 ChainEvent.action_type == action.action_type,
                 ChainEvent.call_name == action.call_name,
                 ChainEvent.amount_tao == action.amount_tao,
