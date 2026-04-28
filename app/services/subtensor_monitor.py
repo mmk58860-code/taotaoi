@@ -1018,8 +1018,9 @@ class SubtensorMonitor:
         if leaf_call.wrapper_path:
             tags.append(f"封装路径: {' -> '.join(leaf_call.wrapper_path)}")
 
+        title_prefix = self._telegram_title_prefix(action_type)
         lines = [
-            f"<b>{title}</b>",
+            f"<b>{title_prefix}{title}</b>",
             f"状态: <b>{'成功' if success else '失败'}</b>",
             f"调用: <code>{leaf_call.pallet}.{leaf_call.call_name}</code>",
             f"子网: <b>{signal['subnet_label']}</b>",
@@ -1037,6 +1038,16 @@ class SubtensorMonitor:
         if failure_reason:
             lines.append(f"失败原因: <code>{failure_reason}</code>")
         return "\n".join(lines)
+
+    def _telegram_title_prefix(self, action_type: str) -> str:
+        # TG 标题最前面放交易方向符号，方便手机通知里一眼区分买卖。
+        if action_type == "stake_add":
+            return "🟢 "
+        if action_type == "stake_remove":
+            return "🔴 "
+        if action_type in {"stake_move", "stake_transfer", "stake_swap", "swap_call"}:
+            return "🟡 "
+        return ""
 
     def _build_trade_signal(self, action_type: str, amount_tao: float, params: Any) -> dict[str, str]:
         # 把底层链上动作翻译成更接近短线交易判断的中文信号。
