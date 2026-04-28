@@ -232,7 +232,7 @@ function wirePanelAwareForms() {
 }
 
 // 页面加载后立即刷新一次，再按固定间隔刷新首页状态数字。
-window.setInterval(refreshState, 2000);
+window.setInterval(refreshState, 1000);
 refreshState();
 wireEventModal();
 wireWorkspaceNav();
