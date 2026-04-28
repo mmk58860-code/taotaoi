@@ -434,17 +434,28 @@ def collect_named_settlement_amounts(payload) -> list[int]:
     # 有些节点把质押结算事件返回成命名字段，amount 在这些事件里就是官方 TaoBalance。
     results: list[int] = []
     if isinstance(payload, dict):
+        marker = " ".join(str(payload.get(key, "")).lower() for key in ("name", "param", "type", "type_name"))
+        if "tao" in marker or "rao" in marker:
+            parsed = to_int(payload.get("value"))
+            if parsed is not None and parsed > 0:
+                results.append(parsed)
         for key in ("amount", "tao_amount", "tao", "rao"):
             parsed = to_int(payload.get(key))
             if parsed is not None and parsed > 0:
                 results.append(parsed)
-        for key in ("attributes", "params", "args", "data", "values"):
+        for key in ("attributes", "params", "args", "data", "values", "event"):
             value = payload.get(key)
-            if isinstance(value, dict):
+            if isinstance(value, (dict, list)):
                 results.extend(collect_named_settlement_amounts(value))
-        nested_event = payload.get("event")
-        if isinstance(nested_event, dict):
-            results.extend(collect_named_settlement_amounts(nested_event))
+        for key, value in payload.items():
+            key_text = str(key).lower()
+            if ("tao" in key_text or "rao" in key_text or key_text == "amount") and "alpha" not in key_text:
+                parsed = to_int(value)
+                if parsed is not None and parsed > 0:
+                    results.append(parsed)
+    elif isinstance(payload, list):
+        for item in payload:
+            results.extend(collect_named_settlement_amounts(item))
     return results
 
 

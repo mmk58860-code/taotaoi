@@ -777,6 +777,7 @@ class SubtensorMonitor:
                 if parsed is not None and parsed > 0:
                     candidates.append(parsed)
             candidates.extend(self._collect_named_settlement_amounts(event.attributes))
+            candidates.extend(self._collect_named_settlement_amounts(event.payload))
             candidates.extend(self._collect_tao_amount_candidates(event.payload))
         return candidates
 
@@ -814,14 +815,31 @@ class SubtensorMonitor:
         normalized = self._normalize_value(payload)
         candidates: list[int] = []
         if isinstance(normalized, dict):
+            marker = " ".join(
+                str(normalized.get(key, "")).lower()
+                for key in ("name", "param", "type", "type_name")
+            )
+            if "tao" in marker or "rao" in marker:
+                parsed = self._to_int(normalized.get("value"))
+                if parsed is not None and parsed > 0:
+                    candidates.append(parsed)
             for key in ("amount", "tao_amount", "tao", "rao"):
                 parsed = self._to_int(normalized.get(key))
                 if parsed is not None and parsed > 0:
                     candidates.append(parsed)
-            for key in ("attributes", "params", "args", "data", "values"):
+            for key in ("attributes", "params", "args", "data", "values", "event"):
                 value = normalized.get(key)
-                if isinstance(value, dict):
+                if isinstance(value, (dict, list)):
                     candidates.extend(self._collect_named_settlement_amounts(value))
+            for key, value in normalized.items():
+                key_text = str(key).lower()
+                if ("tao" in key_text or "rao" in key_text or key_text == "amount") and "alpha" not in key_text:
+                    parsed = self._to_int(value)
+                    if parsed is not None and parsed > 0:
+                        candidates.append(parsed)
+        elif isinstance(normalized, list):
+            for item in normalized:
+                candidates.extend(self._collect_named_settlement_amounts(item))
         return candidates
 
     def _event_attribute_values(self, payload: Any) -> list[Any]:
