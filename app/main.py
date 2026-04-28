@@ -235,13 +235,6 @@ def action_label(event: ChainEvent) -> str:
 
 def event_trade_signal(event: ChainEvent) -> dict[str, str]:
     # 不改数据库结构，直接从原始链上参数里提取短线交易需要看的字段。
-    try:
-        raw = json.loads(event.raw_payload or "{}")
-    except Exception:
-        raw = {}
-    params = raw.get("leaf_call", raw)
-    subnet_ids = extract_subnet_ids(params)
-    subnet_label = "未知子网" if not subnet_ids else "、".join(f"子网 {netuid}" for netuid in subnet_ids[:3])
     direction_map = {
         "stake_add": "买入 / 加仓",
         "stake_remove": "卖出 / 减仓",
@@ -255,6 +248,13 @@ def event_trade_signal(event: ChainEvent) -> dict[str, str]:
         "transfer": "资金转移",
     }
     direction = direction_map.get(event.action_type, "链上动作")
+    try:
+        raw = json.loads(event.raw_payload or "{}")
+        params = raw.get("leaf_call", raw) if isinstance(raw, dict) else raw
+        subnet_ids = extract_subnet_ids(params)
+        subnet_label = "未知子网" if not subnet_ids else "、".join(f"子网 {netuid}" for netuid in subnet_ids[:3])
+    except Exception:
+        subnet_label = "未知子网"
 
     if event.action_type in {"stake_add", "stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
         if event.amount_tao >= 100:
