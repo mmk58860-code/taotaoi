@@ -409,6 +409,8 @@ class SubtensorMonitor:
                 action_type = self._classify_action_type(leaf_call.pallet, leaf_call.call_name)
                 if self._should_ignore_action(action_type):
                     continue
+                if not success and self._is_trade_action(action_type):
+                    continue
                 matched_menus = set(threshold_menu_ids)
                 for address in involved_addresses:
                     matched_menus.update(watch_map.get(address, {}).keys())
@@ -1018,6 +1020,18 @@ class SubtensorMonitor:
     def _should_ignore_action(self, action_type: str) -> bool:
         # 当前项目主要服务 TAO 交易，默认忽略 EVM 噪音；后续如有需要再做成开关。
         return action_type in IGNORED_ACTION_TYPES
+
+    def _is_trade_action(self, action_type: str) -> bool:
+        # 失败的交易调用没有真实成交，不能进入短线交易监控结果。
+        return action_type in {
+            "transfer",
+            "stake_add",
+            "stake_remove",
+            "stake_move",
+            "stake_transfer",
+            "stake_swap",
+            "swap_call",
+        }
 
     def _should_notify_action(
         self,
