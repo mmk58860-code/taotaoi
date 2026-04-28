@@ -35,11 +35,12 @@ function refreshEventRows(events) {
 
   container.innerHTML = events.map((event) => {
     const trade = event.trade_signal || {};
+    const blockLabel = event.block_label || `${event.block_number}-${String(event.extrinsic_index || 0).padStart(4, "0")}`;
     const routeText = `${trade.subnet || "-"} / ${trade.direction || "-"} / ${(event.from_address || "-")} -> ${(event.to_address || "-")}`;
     return `
       <article
         class="event-row"
-        data-block="${escapeHtml(event.block_number)}"
+        data-block="${escapeHtml(blockLabel)}"
         data-event="${escapeHtml(event.action)}"
         data-amount="${escapeHtml(event.amount_label || "0.000000 TAO")}"
         data-route="${escapeHtml(routeText)}"
@@ -47,7 +48,7 @@ function refreshEventRows(events) {
         data-message="${escapeHtml(event.message || "")}"
         data-raw="${escapeHtml(event.raw_payload || "")}"
       >
-        <span class="event-col-block">#${escapeHtml(event.block_number)}</span>
+        <span class="event-col-block">${escapeHtml(blockLabel)}</span>
         <span class="event-col-action">
           <span class="signal-main">${escapeHtml(event.action)}</span>
           <span class="signal-sub">${escapeHtml(trade.direction || "-")}</span>

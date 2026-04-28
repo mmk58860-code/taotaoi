@@ -929,6 +929,8 @@ async def api_state(request: Request) -> JSONResponse:
                 {
                     "id": row.id,
                     "block_number": row.block_number,
+                    "extrinsic_index": row.extrinsic_index,
+                    "block_label": f"{row.block_number}-{row.extrinsic_index:04d}",
                     "action": action_label(row),
                     "amount_label": event_trade_signal(row)["amount_label"],
                     "trade_signal": event_trade_signal(row),
