@@ -61,6 +61,7 @@ function wireWorkspaceNav() {
   const panels = Array.from(document.querySelectorAll(".workspace-panel"));
   if (!menuButtons.length || !panels.length) return;
   const storageKey = "tao-monitor-active-panel";
+  const scrollKey = "tao-monitor-restore-scroll";
 
   function activatePanel(panelId) {
     menuButtons.forEach((button) => {
@@ -91,6 +92,11 @@ function wireWorkspaceNav() {
     menuButtons[0];
   if (initiallyActive) {
     activatePanel(initiallyActive.dataset.panelTarget);
+  }
+  const savedScroll = Number(sessionStorage.getItem(scrollKey) || "");
+  if (Number.isFinite(savedScroll) && savedScroll >= 0) {
+    sessionStorage.removeItem(scrollKey);
+    requestAnimationFrame(() => window.scrollTo({ top: savedScroll, left: 0, behavior: "auto" }));
   }
 }
 
@@ -209,6 +215,7 @@ function wireAddMonitorMenu() {
     const url = new URL(window.location.href);
     url.searchParams.set("panel", targetPanel);
     localStorage.setItem("tao-monitor-active-panel", targetPanel);
+    sessionStorage.setItem("tao-monitor-restore-scroll", String(window.scrollY || 0));
     window.location.href = url.toString();
   });
 }
@@ -219,6 +226,8 @@ function wirePanelAwareForms() {
     form.addEventListener("submit", () => {
       const activePanel = document.querySelector(".workspace-panel.is-active");
       if (!activePanel) return;
+      localStorage.setItem("tao-monitor-active-panel", activePanel.id);
+      sessionStorage.setItem("tao-monitor-restore-scroll", String(window.scrollY || 0));
       let hiddenInput = form.querySelector('input[name="next_panel"]');
       if (!hiddenInput) {
         hiddenInput = document.createElement("input");

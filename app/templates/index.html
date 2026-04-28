@@ -13,13 +13,13 @@
           <h2>左侧导航</h2>
         </div>
         <div class="sidebar-menu">
-          <button class="sidebar-link is-active" type="button" data-panel-target="overview-panel">服务概览</button>
+          <button class="sidebar-link {{ 'is-active' if active_panel == 'overview-panel' else '' }}" type="button" data-panel-target="overview-panel">服务概览</button>
           {% if current_is_superadmin %}
-          <button class="sidebar-link" type="button" data-panel-target="system-panel">系统设置</button>
+          <button class="sidebar-link {{ 'is-active' if active_panel == 'system-panel' else '' }}" type="button" data-panel-target="system-panel">系统设置</button>
           {% endif %}
           {% for menu in monitor_menus %}
           <button
-            class="sidebar-link monitor-menu-link"
+            class="sidebar-link monitor-menu-link {{ 'is-active' if active_panel == 'monitor-menu-' ~ menu.id else '' }}"
             type="button"
             data-panel-target="monitor-menu-{{ menu.id }}"
             data-menu-id="{{ menu.id }}"
@@ -32,7 +32,7 @@
           {% endfor %}
           <button class="sidebar-add-link" id="add-monitor-menu" type="button">＋ 新建钱包监控</button>
           {% if current_is_superadmin %}
-          <button class="sidebar-link" type="button" data-panel-target="accounts-panel">账号管理</button>
+          <button class="sidebar-link {{ 'is-active' if active_panel == 'accounts-panel' else '' }}" type="button" data-panel-target="accounts-panel">账号管理</button>
           {% endif %}
         </div>
         <div class="sidebar-footer">
@@ -62,7 +62,7 @@
           </div>
         </section>
 
-        <section class="workspace-panel is-active" id="overview-panel">
+        <section class="workspace-panel {{ 'is-active' if active_panel == 'overview-panel' else '' }}" id="overview-panel">
           <section class="grid stats-grid stats-grid-compact">
             <article class="panel stat">
               <span>服务状态</span>
@@ -137,7 +137,7 @@
         </section>
 
         {% if current_is_superadmin %}
-        <section class="workspace-panel" id="system-panel">
+        <section class="workspace-panel {{ 'is-active' if active_panel == 'system-panel' else '' }}" id="system-panel">
           <article class="panel">
             <div class="panel-head">
               <h2>系统设置</h2>
@@ -169,7 +169,7 @@
         {% endif %}
 
         {% for menu in monitor_menus %}
-        <section class="workspace-panel" id="monitor-menu-{{ menu.id }}">
+        <section class="workspace-panel {{ 'is-active' if active_panel == 'monitor-menu-' ~ menu.id else '' }}" id="monitor-menu-{{ menu.id }}">
           {% set menu_settings = menu_settings_map.get(menu.id, {}) %}
           {% if menu.menu_kind == 'alert' %}
           <article class="panel">
@@ -355,7 +355,7 @@
         {% endfor %}
 
         {% if current_is_superadmin %}
-        <section class="workspace-panel" id="accounts-panel">
+        <section class="workspace-panel {{ 'is-active' if active_panel == 'accounts-panel' else '' }}" id="accounts-panel">
           <section class="panel">
             <div class="panel-head">
               <h2>账号管理</h2>

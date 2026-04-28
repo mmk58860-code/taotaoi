@@ -626,6 +626,13 @@ async def dashboard(request: Request):
             select(func.count()).select_from(ChainEvent).where(ChainEvent.owner_user_id == user_id)
         ) or 0
 
+    requested_panel = request.query_params.get("panel", "")
+    valid_panels = {"overview-panel"}
+    if is_superadmin(request):
+        valid_panels.update({"system-panel", "accounts-panel"})
+    valid_panels.update(f"monitor-menu-{menu.id}" for menu in monitor_menus)
+    active_panel = requested_panel if requested_panel in valid_panels else "overview-panel"
+
     if active_import_preview:
         if int(active_import_preview.get("owner_user_id", 0)) != user_id:
             active_import_preview = None
@@ -655,6 +662,7 @@ async def dashboard(request: Request):
             "active_import_preview": active_import_preview,
             "active_import_token": import_token,
             "import_result": import_result,
+            "active_panel": active_panel,
             "state": state,
             "system_settings": system_settings,
             "total_events": total_events,
