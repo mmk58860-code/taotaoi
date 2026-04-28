@@ -308,6 +308,7 @@ def normalized_trade_amount_tao(event: ChainEvent) -> float:
         return 0.0
 
     candidates = collect_settlement_tao_from_events(action_type, related_events)
+    candidates.extend(collect_balance_tao_from_events(action_type, related_events))
     if action_type == "transfer":
         candidates.extend(collect_amount_candidates(params, include_generic_amount=True))
     elif action_type == "stake_add":
@@ -401,6 +402,34 @@ def collect_settlement_tao_from_events(action_type: str, related_events) -> list
     return results
 
 
+def collect_balance_tao_from_events(action_type: str, related_events) -> list[int]:
+    # 减仓卖出没有解析到 StakeRemoved 时，用同一笔交易里的 TAO 入账事件兜底显示。
+    if action_type not in {"stake_remove", "stake_move", "stake_transfer", "stake_swap"}:
+        return []
+    if not isinstance(related_events, list):
+        return []
+    balance_amount_index = {
+        "deposit": 1,
+        "endowed": 1,
+        "transfer": 2,
+    }
+    results: list[int] = []
+    for event in related_events:
+        if event_pallet_from_payload(event).lower() != "balances":
+            continue
+        event_name = event_name_from_payload(event).lower()
+        amount_index = balance_amount_index.get(event_name)
+        if amount_index is None:
+            continue
+        values = event_attribute_values(event)
+        if len(values) > amount_index:
+            parsed = to_int(values[amount_index])
+            if parsed is not None and parsed > 0:
+                results.append(parsed)
+        results.extend(collect_named_settlement_amounts(event))
+    return results
+
+
 def collect_named_settlement_amounts(payload) -> list[int]:
     # 有些节点把质押结算事件返回成命名字段，amount 在这些事件里就是官方 TaoBalance。
     results: list[int] = []
@@ -429,6 +458,19 @@ def event_name_from_payload(payload) -> str:
     nested = payload.get("event")
     if isinstance(nested, dict):
         return event_name_from_payload(nested)
+    return ""
+
+
+def event_pallet_from_payload(payload) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("module_id", "module", "pallet"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    nested = payload.get("event")
+    if isinstance(nested, dict):
+        return event_pallet_from_payload(nested)
     return ""
 
 

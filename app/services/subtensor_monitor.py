@@ -717,6 +717,7 @@ class SubtensorMonitor:
 
         amount_candidates: list[int] = []
         amount_candidates.extend(self._collect_settlement_tao_from_events(action_type, related_events))
+        amount_candidates.extend(self._collect_balance_tao_from_events(action_type, related_events))
         if action_type == "transfer":
             amount_candidates.extend(self._collect_amount_candidates(leaf_call.params, include_generic_amount=True))
         elif action_type == "stake_add":
@@ -777,6 +778,35 @@ class SubtensorMonitor:
                     candidates.append(parsed)
             candidates.extend(self._collect_named_settlement_amounts(event.attributes))
             candidates.extend(self._collect_tao_amount_candidates(event.payload))
+        return candidates
+
+    def _collect_balance_tao_from_events(
+        self,
+        action_type: str,
+        related_events: list[EventEnvelope],
+    ) -> list[int]:
+        # 减仓卖出如果 StakeRemoved 格式解析不到，就用同一 extrinsic 里的 TAO 入账事件兜底。
+        if action_type not in {"stake_remove", "stake_move", "stake_transfer", "stake_swap"}:
+            return []
+        balance_amount_index = {
+            "deposit": 1,
+            "endowed": 1,
+            "transfer": 2,
+        }
+        candidates: list[int] = []
+        for event in related_events:
+            if event.pallet.lower() != "balances":
+                continue
+            event_name = event.event_name.lower()
+            amount_index = balance_amount_index.get(event_name)
+            if amount_index is None:
+                continue
+            values = self._event_attribute_values(event.attributes)
+            if len(values) > amount_index:
+                parsed = self._to_int(values[amount_index])
+                if parsed is not None and parsed > 0:
+                    candidates.append(parsed)
+            candidates.extend(self._collect_named_settlement_amounts(event.attributes))
         return candidates
 
     def _collect_named_settlement_amounts(self, payload: Any) -> list[int]:
