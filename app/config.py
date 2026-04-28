@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="change-me", alias="SECRET_KEY")
     admin_username: str = Field(default="admin", alias="ADMIN_USERNAME")
     admin_password: str = Field(default="change-this-password", alias="ADMIN_PASSWORD")
+    cleanup_enabled: bool = Field(default=True, alias="CLEANUP_ENABLED")
+    cleanup_time: str = Field(default="04:00", alias="CLEANUP_TIME")
+    cleanup_retention_days: int = Field(default=3, alias="CLEANUP_RETENTION_DAYS")
 
     @property
     def sqlite_path(self) -> Path | None:

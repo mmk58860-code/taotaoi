@@ -35,6 +35,7 @@ from app.services.auth import (
     encrypt_password_for_display,
     hash_password,
 )
+from app.services.cleanup_service import CleanupService
 from app.services.monitor_menu_service import (
     BUILTIN_ALERT_KIND,
     BUILTIN_WALLET_KIND,
@@ -62,6 +63,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 # 全局单例对象：监听器、TG 发送器、配置对象、模板引擎。
 monitor = SubtensorMonitor()
+cleanup_service = CleanupService()
 notifier = TelegramNotifier()
 app_settings = get_settings()
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
@@ -97,9 +99,11 @@ async def lifespan(_: FastAPI):
         ensure_state(session)
 
     await monitor.start()
+    await cleanup_service.start()
     try:
         yield
     finally:
+        await cleanup_service.stop()
         await monitor.stop()
 
 
