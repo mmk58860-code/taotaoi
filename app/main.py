@@ -270,12 +270,22 @@ def event_trade_signal(event: ChainEvent) -> dict[str, object]:
         signal = "大额资金转移"
     else:
         signal = direction
+    amount_label = f"{normalized_amount:.6f} TAO"
+    if normalized_amount <= 0 and event.action_type in {
+        "stake_remove",
+        "stake_move",
+        "stake_transfer",
+        "stake_swap",
+        "swap_call",
+    }:
+        amount_label = "未确认 TAO 成交额"
 
     return {
         "subnet": subnet_label,
         "direction": direction,
         "signal": signal,
         "amount_tao": normalized_amount,
+        "amount_label": amount_label,
     }
 
 

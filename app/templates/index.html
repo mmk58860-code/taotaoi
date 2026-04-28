@@ -106,7 +106,7 @@
                   class="event-row"
                   data-block="{{ event.block_number }}"
                   data-event="{{ action_label(event) }}"
-                  data-amount="{{ '%.6f'|format(trade.amount_tao) }} TAO"
+                  data-amount="{{ trade.amount_label }}"
                   data-route="{{ trade.subnet ~ ' / ' ~ trade.direction ~ ' / ' ~ ((event.from_address or '-') ~ ' -> ' ~ (event.to_address or '-')) }}"
                   data-time="{{ to_beijing_string(event.detected_at) }}"
                   data-message="{{ event.message }}"
@@ -118,7 +118,7 @@
                     <span class="signal-sub">{{ trade.direction }}</span>
                   </span>
                   <span class="event-col-amount">
-                    <span class="amount-main">{{ "%.6f"|format(trade.amount_tao) }} TAO</span>
+                    <span class="amount-main">{{ trade.amount_label }}</span>
                     <span class="signal-sub">{{ trade.subnet }}</span>
                   </span>
                   <span class="event-col-route">
