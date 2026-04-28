@@ -720,14 +720,8 @@ class SubtensorMonitor:
         amount_candidates.extend(self._collect_balance_tao_from_events(action_type, related_events))
         if action_type == "transfer":
             amount_candidates.extend(self._collect_amount_candidates(leaf_call.params, include_generic_amount=True))
-        elif action_type == "stake_add":
-            amount_candidates.extend(
-                self._collect_amount_candidates(
-                    leaf_call.params,
-                    include_generic_amount=True,
-                    include_stake_amount=True,
-                )
-            )
+        elif action_type == "stake_add" and not amount_candidates:
+            amount_candidates.extend(self._collect_confirmed_add_stake_amounts(related_events))
         elif action_type in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
             for event in related_events:
                 amount_candidates.extend(self._collect_tao_amount_candidates(event.attributes))
@@ -808,6 +802,16 @@ class SubtensorMonitor:
                 if parsed is not None and parsed > 0:
                     candidates.append(parsed)
             candidates.extend(self._collect_named_settlement_amounts(event.attributes))
+        return candidates
+
+    def _collect_confirmed_add_stake_amounts(self, related_events: list[EventEnvelope]) -> list[int]:
+        # 买入也尽量用结算事件确认，不直接把 add_stake_limit 的提交金额当成 Backprop 口径成交额。
+        candidates: list[int] = []
+        for event in related_events:
+            if event.pallet.lower() != "subtensormodule" or event.event_name.lower() != "stakeadded":
+                continue
+            candidates.extend(self._collect_named_settlement_amounts(event.attributes))
+            candidates.extend(self._collect_named_settlement_amounts(event.payload))
         return candidates
 
     def _collect_named_settlement_amounts(self, payload: Any) -> list[int]:

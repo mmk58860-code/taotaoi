@@ -311,14 +311,8 @@ def normalized_trade_amount_tao(event: ChainEvent) -> float:
     candidates.extend(collect_balance_tao_from_events(action_type, related_events))
     if action_type == "transfer":
         candidates.extend(collect_amount_candidates(params, include_generic_amount=True))
-    elif action_type == "stake_add":
-        candidates.extend(
-            collect_amount_candidates(
-                params,
-                include_generic_amount=True,
-                include_stake_amount=True,
-            )
-        )
+    elif action_type == "stake_add" and not candidates:
+        candidates.extend(collect_confirmed_add_stake_amounts(related_events))
     elif action_type in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
         if isinstance(related_events, list):
             for related_event in related_events:
@@ -426,6 +420,20 @@ def collect_balance_tao_from_events(action_type: str, related_events) -> list[in
             parsed = to_int(values[amount_index])
             if parsed is not None and parsed > 0:
                 results.append(parsed)
+        results.extend(collect_named_settlement_amounts(event))
+    return results
+
+
+def collect_confirmed_add_stake_amounts(related_events) -> list[int]:
+    # 页面历史也按结算事件重算买入金额，避免把 add_stake_limit 提交额当成交额展示。
+    if not isinstance(related_events, list):
+        return []
+    results: list[int] = []
+    for event in related_events:
+        if event_pallet_from_payload(event).lower() != "subtensormodule":
+            continue
+        if event_name_from_payload(event).lower() != "stakeadded":
+            continue
         results.extend(collect_named_settlement_amounts(event))
     return results
 
