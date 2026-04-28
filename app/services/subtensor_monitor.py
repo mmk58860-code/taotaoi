@@ -386,8 +386,6 @@ class SubtensorMonitor:
         }
 
         results: list[ActionRecord] = []
-        block_action_index = 0
-
         for extrinsic_index, extrinsic in enumerate(extrinsic_rows):
             extrinsic_payload = self._normalize_extrinsic(extrinsic, extrinsic_index)
             related_events = events_by_extrinsic.get(extrinsic_index, [])
@@ -401,7 +399,7 @@ class SubtensorMonitor:
             if not leaf_calls:
                 continue
 
-            for leaf_call in leaf_calls:
+            for leaf_call_index, leaf_call in enumerate(leaf_calls):
                 involved_addresses = self._build_involved_addresses(
                     leaf_call,
                     extrinsic_payload["signer_address"],
@@ -443,7 +441,7 @@ class SubtensorMonitor:
                         involved_addresses=involved_addresses,
                     )
                     title = ACTION_TITLES.get(action_type, ACTION_TITLES["generic_call"])
-                    block_action_index += 1
+                    stable_event_index = extrinsic_index * 1000 + leaf_call_index
                     message = self._build_message(
                         title=title,
                         leaf_call=leaf_call,
@@ -481,7 +479,7 @@ class SubtensorMonitor:
                             owner_user_id=profile.owner_user_id,
                             menu_name=profile.menu_name,
                             block_number=block_number,
-                            event_index=block_action_index,
+                            event_index=stable_event_index,
                             extrinsic_index=extrinsic_index,
                             pallet=leaf_call.pallet,
                             event_name=leaf_call.call_name,
@@ -1127,13 +1125,7 @@ class SubtensorMonitor:
 
         for action in actions:
             with session_scope() as session:
-                exists = session.scalar(
-                    select(ChainEvent).where(
-                        ChainEvent.monitor_menu_id == action.monitor_menu_id,
-                        ChainEvent.block_number == action.block_number,
-                        ChainEvent.event_index == action.event_index,
-                    )
-                )
+                exists = self._find_existing_event(session, action)
                 if exists:
                     continue
 
@@ -1177,15 +1169,35 @@ class SubtensorMonitor:
 
             if sent:
                 with session_scope() as session:
-                    stored = session.scalar(
-                        select(ChainEvent).where(
-                            ChainEvent.monitor_menu_id == action.monitor_menu_id,
-                            ChainEvent.block_number == action.block_number,
-                            ChainEvent.event_index == action.event_index,
-                        )
-                    )
+                    stored = self._find_existing_event(session, action)
                     if stored:
                         stored.notification_sent = True
+
+    def _find_existing_event(self, session: Any, action: ActionRecord) -> ChainEvent | None:
+        # 快速监听和 finalized 校正会重复扫描同一个区块；这里用稳定身份防止重复入库和重复 TG。
+        exact = session.scalar(
+            select(ChainEvent).where(
+                ChainEvent.monitor_menu_id == action.monitor_menu_id,
+                ChainEvent.block_number == action.block_number,
+                ChainEvent.event_index == action.event_index,
+            )
+        )
+        if exact:
+            return exact
+
+        return session.scalar(
+            select(ChainEvent).where(
+                ChainEvent.monitor_menu_id == action.monitor_menu_id,
+                ChainEvent.block_number == action.block_number,
+                ChainEvent.extrinsic_index == action.extrinsic_index,
+                ChainEvent.action_type == action.action_type,
+                ChainEvent.call_name == action.call_name,
+                ChainEvent.amount_tao == action.amount_tao,
+                ChainEvent.signer_address == action.signer_address,
+                ChainEvent.from_address == action.from_address,
+                ChainEvent.to_address == action.to_address,
+            )
+        )
 
     def _extract_named_addresses(self, payload: Any) -> dict[str, str]:
         # 从常见命名参数里提取地址角色，便于后面做 wallet 命中和路径展示。
