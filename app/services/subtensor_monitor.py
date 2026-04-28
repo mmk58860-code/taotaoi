@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 RAO_PER_TAO = 1_000_000_000
 SS58_PATTERN = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{40,80}$")
 HEX_PATTERN = re.compile(r"^0x[a-fA-F0-9]{40,66}$")
+IGNORED_ACTION_TYPES = {"evm_transact"}
 
 WRAPPER_CALLS: dict[tuple[str, str], str] = {
     ("utility", "batch"): "批量调用",
@@ -137,6 +138,7 @@ class SubtensorMonitor:
         self._stop_event = asyncio.Event()
         self._wakeup_event = asyncio.Event()
         self._notifier = TelegramNotifier()
+        self._last_reconciled_finalized_block = 0
 
     async def start(self) -> None:
         # 避免重复创建监听任务。
@@ -188,7 +190,7 @@ class SubtensorMonitor:
         return int(settings["poll_interval_seconds"])
 
     async def _scan_once(self) -> None:
-        # 单轮扫描：读取系统设置、账号配置、钱包列表，再逐块解码全部调用动作。
+        # 先处理最新可见区块争取首见，再用最终确认区块补漏校对。
         with session_scope() as session:
             raw_settings = get_system_runtime_settings(session)
             typed = typed_system_runtime_settings(raw_settings)
@@ -212,30 +214,70 @@ class SubtensorMonitor:
             state.last_error = None
 
         substrate = SubstrateInterface(url=str(typed["subtensor_ws_url"]))
-        latest_block = await asyncio.to_thread(self._get_latest_finalized_block, substrate)
-        target_block = max(0, int(latest_block) - int(typed["finality_lag_blocks"]))
+        latest_head_block = await asyncio.to_thread(self._get_latest_head_block, substrate)
+        finalized_block = await asyncio.to_thread(self._get_latest_finalized_block, substrate)
+        finalized_target = max(0, int(finalized_block) - int(typed["finality_lag_blocks"]))
 
         with session_scope() as session:
             state = ensure_state(session)
-            start_block = state.last_scanned_block + 1 if state.last_scanned_block else max(target_block - 20, 1)
-            state.last_seen_head = int(latest_block)
+            start_block = state.last_scanned_block + 1 if state.last_scanned_block else max(latest_head_block - 20, 1)
+            state.last_seen_head = int(latest_head_block)
 
+        await self._scan_block_range(
+            substrate=substrate,
+            start_block=start_block,
+            target_block=latest_head_block,
+            watch_map=watch_map,
+            profile_map=profile_map,
+            update_progress=True,
+        )
+
+        if finalized_target > self._last_reconciled_finalized_block:
+            reconcile_start = (
+                max(1, finalized_target - 20)
+                if self._last_reconciled_finalized_block <= 0
+                else max(1, self._last_reconciled_finalized_block)
+            )
+            await self._scan_block_range(
+                substrate=substrate,
+                start_block=reconcile_start,
+                target_block=finalized_target,
+                watch_map=watch_map,
+                profile_map=profile_map,
+                update_progress=False,
+            )
+            self._last_reconciled_finalized_block = finalized_target
+
+    async def _scan_block_range(
+        self,
+        substrate: SubstrateInterface,
+        start_block: int,
+        target_block: int,
+        watch_map: dict[str, dict[int, list[str]]],
+        profile_map: dict[int, NotificationProfile],
+        update_progress: bool,
+    ) -> None:
         if start_block > target_block:
             return
 
         for block_number in range(start_block, target_block + 1):
-            actions = await asyncio.to_thread(
-                self._extract_actions_sync,
-                substrate,
-                block_number,
-                watch_map,
-                profile_map,
-            )
+            try:
+                actions = await asyncio.to_thread(
+                    self._extract_actions_sync,
+                    substrate,
+                    block_number,
+                    watch_map,
+                    profile_map,
+                )
+            except Exception:
+                logger.exception("区块 %s 扫描失败，下一轮会重试", block_number)
+                break
             await self._persist_and_notify(actions)
-            with session_scope() as session:
-                state = ensure_state(session)
-                state.last_scanned_block = block_number
-                state.updated_at = datetime.utcnow()
+            if update_progress:
+                with session_scope() as session:
+                    state = ensure_state(session)
+                    state.last_scanned_block = block_number
+                    state.updated_at = datetime.utcnow()
 
     def _build_watch_map(self, wallet_rows: list[WalletWatch]) -> dict[str, dict[int, list[str]]]:
         # 同一个地址允许被多个监控菜单分别监控，所以用 address -> menu_id -> aliases 的结构。
@@ -286,6 +328,8 @@ class SubtensorMonitor:
                 involved_addresses = self._build_involved_addresses(leaf_call, extrinsic_payload["signer_address"])
                 amount_tao = self._estimate_amount_tao(leaf_call, related_events)
                 action_type = self._classify_action_type(leaf_call.pallet, leaf_call.call_name)
+                if self._should_ignore_action(action_type):
+                    continue
                 matched_menus = set(threshold_menu_ids)
                 for address in involved_addresses:
                     matched_menus.update(watch_map.get(address, {}).keys())
@@ -681,6 +725,10 @@ class SubtensorMonitor:
             return "shielded_call"
         return "generic_call"
 
+    def _should_ignore_action(self, action_type: str) -> bool:
+        # 当前项目主要服务 TAO 交易，默认忽略 EVM 噪音；后续如有需要再做成开关。
+        return action_type in IGNORED_ACTION_TYPES
+
     def _collect_aliases(
         self,
         watch_map: dict[str, dict[int, list[str]]],
@@ -908,6 +956,19 @@ class SubtensorMonitor:
         # finalized head 和 block number 都是同步 RPC，这里放在线程里统一执行。
         finalized_head = substrate.get_chain_finalised_head()
         return int(substrate.get_block_number(finalized_head))
+
+    def _get_latest_head_block(self, substrate: SubstrateInterface) -> int:
+        # 最新块头比最终确认块更早，用来做首见提醒；失败时退回最终确认块。
+        try:
+            try:
+                chain_head = substrate.get_chain_head()
+            except AttributeError:
+                response = substrate.rpc_request("chain_getHead", [])
+                chain_head = response.get("result") if isinstance(response, dict) else response
+            return int(substrate.get_block_number(chain_head))
+        except Exception:
+            logger.exception("读取最新块头失败，退回使用最终确认块")
+            return self._get_latest_finalized_block(substrate)
 
     def _normalize_value(self, value: Any) -> Any:
         # 尽量把 substrate-interface 的对象递归转换成普通 Python 数据。
