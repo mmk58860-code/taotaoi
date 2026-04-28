@@ -313,6 +313,10 @@ def to_int(value) -> int | None:
     return None
 
 
+# 把页面常用函数注册成模板全局函数，避免某个渲染入口漏传后导致后台 500。
+templates.env.globals["event_trade_signal"] = event_trade_signal
+
+
 def parse_menu_data_import(file_bytes: bytes) -> dict[str, object]:
     # 资料导入只接受项目自己导出的 JSON，避免字段不一致导致误导入。
     try:

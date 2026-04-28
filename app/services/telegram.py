@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 import httpx
+
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramNotifier:
@@ -12,5 +17,8 @@ class TelegramNotifier:
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.post(url, json=payload)
+            if response.status_code == 429:
+                logger.warning("Telegram 推送过快，已被限流，本条消息暂不重试")
+                return False
             response.raise_for_status()
         return True
