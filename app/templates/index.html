@@ -137,7 +137,7 @@
             </div>
             <form class="stack" method="post" action="/settings/system">
               <label>
-                <span>Subtensor WS</span>
+                <span>链节点地址</span>
                 <input name="subtensor_ws_url" value="{{ system_settings['subtensor_ws_url'] }}" required>
               </label>
               <label>
@@ -149,7 +149,7 @@
                 <input name="poll_interval_seconds" type="number" min="2" max="120" value="{{ system_settings['poll_interval_seconds'] }}" required>
               </label>
               <label>
-                <span>Finality Lag</span>
+                <span>最终确认延后块数</span>
                 <input name="finality_lag_blocks" type="number" min="0" max="20" value="{{ system_settings['finality_lag_blocks'] }}" required>
               </label>
               <div class="form-actions">

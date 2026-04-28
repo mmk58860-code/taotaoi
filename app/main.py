@@ -770,8 +770,8 @@ async def save_system_settings(request: Request, next_panel: str = Form("")) -> 
     payload = SystemSettingsUpdate(
         subtensor_ws_url=str(form.get("subtensor_ws_url", "")).strip(),
         network_name=str(form.get("network_name", "")).strip(),
-        poll_interval_seconds=int(form.get("poll_interval_seconds", 6)),
-        finality_lag_blocks=int(form.get("finality_lag_blocks", 1)),
+        poll_interval_seconds=int(form.get("poll_interval_seconds", 2)),
+        finality_lag_blocks=int(form.get("finality_lag_blocks", 0)),
     )
 
     with session_scope() as session:
