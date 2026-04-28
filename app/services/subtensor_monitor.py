@@ -824,15 +824,35 @@ class SubtensorMonitor:
         normalized = self._normalize_value(payload)
         candidates: list[int] = []
         if isinstance(normalized, dict):
+            settlement_keys = {
+                "amount",
+                "tao_amount",
+                "tao",
+                "rao",
+                "balance",
+                "balance_unstaked",
+                "balance_staked",
+                "balance_moved",
+                "balance_transferred",
+                "balance_swapped",
+                "tao_unstaked",
+                "tao_staked",
+                "tao_moved",
+                "tao_transferred",
+                "tao_swapped",
+            }
             marker = " ".join(
                 str(normalized.get(key, "")).lower()
                 for key in ("name", "param", "type", "type_name")
             )
-            if "tao" in marker or "rao" in marker:
+            if (
+                "alpha" not in marker
+                and ("tao" in marker or "rao" in marker or any(key in marker for key in settlement_keys))
+            ):
                 parsed = self._to_int(normalized.get("value"))
                 if parsed is not None and parsed > 0:
                     candidates.append(parsed)
-            for key in ("amount", "tao_amount", "tao", "rao"):
+            for key in settlement_keys:
                 parsed = self._to_int(normalized.get(key))
                 if parsed is not None and parsed > 0:
                     candidates.append(parsed)
@@ -842,7 +862,10 @@ class SubtensorMonitor:
                     candidates.extend(self._collect_named_settlement_amounts(value))
             for key, value in normalized.items():
                 key_text = str(key).lower()
-                if ("tao" in key_text or "rao" in key_text or key_text == "amount") and "alpha" not in key_text:
+                if (
+                    "alpha" not in key_text
+                    and ("tao" in key_text or "rao" in key_text or key_text in settlement_keys)
+                ):
                     parsed = self._to_int(value)
                     if parsed is not None and parsed > 0:
                         candidates.append(parsed)
