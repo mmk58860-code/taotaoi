@@ -233,7 +233,7 @@ def action_label(event: ChainEvent) -> str:
     return label
 
 
-def event_trade_signal(event: ChainEvent) -> dict[str, str]:
+def event_trade_signal(event: ChainEvent) -> dict[str, object]:
     # 不改数据库结构，直接从原始链上参数里提取短线交易需要看的字段。
     normalized_amount = normalized_trade_amount_tao(event)
     direction_map = {
@@ -275,11 +275,12 @@ def event_trade_signal(event: ChainEvent) -> dict[str, str]:
         "subnet": subnet_label,
         "direction": direction,
         "signal": signal,
+        "amount_tao": normalized_amount,
     }
 
 
 def normalized_trade_amount_tao(event: ChainEvent) -> float:
-    # 历史记录可能用旧规则把 alpha/price 误算成 TAO，这里展示信号时重新按调用参数估值。
+    # 历史记录可能用旧规则把 Alpha/price 误算成 TAO，这里展示信号时重新按官方语义估值。
     try:
         raw = json.loads(event.raw_payload or "{}")
     except Exception:
@@ -287,7 +288,26 @@ def normalized_trade_amount_tao(event: ChainEvent) -> float:
     if not isinstance(raw, dict):
         return float(event.amount_tao or 0)
     params = raw.get("leaf_call", raw)
-    candidates = collect_amount_candidates(params)
+    related_events = raw.get("related_events", [])
+    action_type = str(raw.get("action_type") or event.action_type or "")
+    if action_type in {"weights_set", "weights_commit", "weights_reveal", "children_set", "identity_set"}:
+        return 0.0
+
+    if action_type == "transfer":
+        candidates = collect_amount_candidates(params, include_generic_amount=True)
+    elif action_type == "stake_add":
+        candidates = collect_amount_candidates(
+            params,
+            include_generic_amount=True,
+            include_stake_amount=True,
+        )
+    elif action_type in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
+        candidates = []
+        if isinstance(related_events, list):
+            for related_event in related_events:
+                candidates.extend(collect_tao_amount_candidates(related_event))
+    else:
+        candidates = collect_tao_amount_candidates(params)
     if not candidates:
         return 0.0
     return round(max(candidates) / 1_000_000_000, 9)
@@ -327,26 +347,69 @@ def extract_subnet_ids(payload) -> list[int]:
     return list(dict.fromkeys(results))
 
 
-def collect_amount_candidates(payload) -> list[int]:
-    # 页面展示用的保守 TAO 金额提取，避免把 alpha/price/value 误当成 TAO。
+def collect_tao_amount_candidates(payload) -> list[int]:
+    # 只吃明确带 TAO/rao/手续费/销毁成本的字段；不把普通 amount 当 TAO。
+    return collect_amount_candidates(payload)
+
+
+def collect_amount_candidates(
+    payload,
+    *,
+    include_generic_amount: bool = False,
+    include_stake_amount: bool = False,
+) -> list[int]:
+    # 页面展示用的保守 TAO 金额提取，避免把 Alpha/price/netuid/value 误当成 TAO。
     results: list[int] = []
-    amount_keys = ("amount", "stake", "stake_amount", "tao", "tao_amount", "burn", "fee", "cost", "rao")
+    tao_keys = ("tao", "rao", "burn", "fee", "cost")
+    stake_keys = ("stake", "stake_amount", "amount_staked", "stake_to_be_added")
+    generic_keys = ("amount", "value")
+
+    def is_amount_key(key_text: str) -> bool:
+        key_text = key_text.lower()
+        if any(blocked in key_text for blocked in ("alpha", "price", "netuid", "subnet", "uid", "block")):
+            return False
+        if any(token in key_text for token in tao_keys):
+            return True
+        if include_stake_amount and any(token in key_text for token in stake_keys):
+            return True
+        if include_generic_amount and key_text in generic_keys:
+            return True
+        return False
+
     if isinstance(payload, dict):
         param_name = str(payload.get("name", payload.get("param", ""))).lower()
-        if any(token in param_name for token in amount_keys):
+        if is_amount_key(param_name):
             parsed = to_int(payload.get("value"))
             if parsed is not None and parsed > 0:
                 results.append(parsed)
         for key, value in payload.items():
             key_text = str(key).lower()
-            if any(token in key_text for token in amount_keys):
+            if key_text != "value" and is_amount_key(key_text):
                 parsed = to_int(value)
                 if parsed is not None and parsed > 0:
                     results.append(parsed)
-            results.extend(collect_amount_candidates(value))
+            results.extend(
+                collect_amount_candidates(
+                    value,
+                    include_generic_amount=include_generic_amount,
+                    include_stake_amount=include_stake_amount,
+                )
+            )
     elif isinstance(payload, list):
+        contains_address = any(isinstance(item, str) and len(item) >= 40 for item in payload)
+        if include_generic_amount and contains_address:
+            for item in payload:
+                parsed = to_int(item)
+                if parsed is not None and parsed > 0:
+                    results.append(parsed)
         for item in payload:
-            results.extend(collect_amount_candidates(item))
+            results.extend(
+                collect_amount_candidates(
+                    item,
+                    include_generic_amount=include_generic_amount,
+                    include_stake_amount=include_stake_amount,
+                )
+            )
     return results
 
 
@@ -765,7 +828,7 @@ async def api_state(request: Request) -> JSONResponse:
                     "id": row.id,
                     "block_number": row.block_number,
                     "action": action_label(row),
-                    "amount_tao": row.amount_tao,
+                    "amount_tao": event_trade_signal(row)["amount_tao"],
                     "trade_signal": event_trade_signal(row),
                     "message": row.message,
                     "detected_at": to_beijing_iso(row.detected_at),

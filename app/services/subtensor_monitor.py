@@ -709,57 +709,99 @@ class SubtensorMonitor:
         return list(dict.fromkeys(addresses))
 
     def _estimate_amount_tao(self, leaf_call: CallEnvelope, related_events: list[EventEnvelope]) -> float:
-        # 尽量从调用参数和关联 events 中提取经济量，统一按 1e9 精度折算为 TAO 数字。
+        # 官方动态 TAO 里，减仓/换仓/迁移的调用 amount 多数是 Alpha 数量，不是 TAO。
+        # 所以这里只把明确带 tao/rao 语义的字段按 TAO 估值，避免把 Alpha 误报成大额 TAO。
         action_type = self._classify_action_type(leaf_call.pallet, leaf_call.call_name)
         if action_type in {"weights_set", "weights_commit", "weights_reveal", "children_set", "identity_set"}:
             return 0.0
 
         amount_candidates: list[int] = []
-        amount_candidates.extend(self._collect_amount_candidates(leaf_call.params))
+        if action_type == "transfer":
+            amount_candidates.extend(self._collect_amount_candidates(leaf_call.params, include_generic_amount=True))
+        elif action_type == "stake_add":
+            amount_candidates.extend(
+                self._collect_amount_candidates(
+                    leaf_call.params,
+                    include_generic_amount=True,
+                    include_stake_amount=True,
+                )
+            )
+        elif action_type in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
+            for event in related_events:
+                amount_candidates.extend(self._collect_tao_amount_candidates(event.attributes))
+                amount_candidates.extend(self._collect_tao_amount_candidates(event.payload))
+        else:
+            amount_candidates.extend(self._collect_tao_amount_candidates(leaf_call.params))
 
         if not amount_candidates:
             return 0.0
 
         return round(max(amount_candidates) / RAO_PER_TAO, 9)
 
-    def _collect_amount_candidates(self, payload: Any) -> list[int]:
-        # 只提取看起来像金额字段的数值，避免把 netuid、uid、block 等误当成 TAO。
+    def _collect_tao_amount_candidates(self, payload: Any) -> list[int]:
+        # 只提取明确写着 TAO/rao/手续费/销毁成本的字段；不吃泛泛的 amount/stake。
+        return self._collect_amount_candidates(payload)
+
+    def _collect_amount_candidates(
+        self,
+        payload: Any,
+        *,
+        include_generic_amount: bool = False,
+        include_stake_amount: bool = False,
+    ) -> list[int]:
+        # 只提取看起来像金额字段的数值，避免把 netuid、uid、block、alpha、price 误当成 TAO。
         normalized = self._normalize_value(payload)
         candidates: list[int] = []
-        amountish_keys = (
-            "amount",
-            "stake",
-            "stake_amount",
-            "tao",
-            "tao_amount",
-            "burn",
-            "fee",
-            "cost",
-            "rao",
-        )
+        tao_keys = ("tao", "rao", "fee", "cost", "burn")
+        stake_keys = ("stake", "stake_amount", "amount_staked", "stake_to_be_added")
+        generic_keys = ("amount", "value")
+
+        def is_amount_key(key_text: str) -> bool:
+            key_text = key_text.lower()
+            if any(blocked in key_text for blocked in ("alpha", "price", "netuid", "subnet", "uid", "block")):
+                return False
+            if any(token in key_text for token in tao_keys):
+                return True
+            if include_stake_amount and any(token in key_text for token in stake_keys):
+                return True
+            if include_generic_amount and key_text in generic_keys:
+                return True
+            return False
 
         if isinstance(normalized, dict):
             param_name = str(normalized.get("name", normalized.get("param", ""))).lower()
-            if any(token in param_name for token in amountish_keys):
+            if is_amount_key(param_name):
                 parsed = self._to_int(normalized.get("value"))
                 if parsed is not None and parsed > 0:
                     candidates.append(parsed)
             for key, value in normalized.items():
                 key_text = str(key).lower()
-                if any(token in key_text for token in amountish_keys):
+                if key_text != "value" and is_amount_key(key_text):
                     parsed = self._to_int(value)
                     if parsed is not None and parsed > 0:
                         candidates.append(parsed)
-                candidates.extend(self._collect_amount_candidates(value))
+                candidates.extend(
+                    self._collect_amount_candidates(
+                        value,
+                        include_generic_amount=include_generic_amount,
+                        include_stake_amount=include_stake_amount,
+                    )
+                )
         elif isinstance(normalized, list):
             contains_address = any(isinstance(item, str) and self._looks_like_address(item) for item in normalized)
-            if contains_address:
+            if include_generic_amount and contains_address:
                 for item in normalized:
                     parsed = self._to_int(item)
                     if parsed is not None and parsed > 0:
                         candidates.append(parsed)
             for item in normalized:
-                candidates.extend(self._collect_amount_candidates(item))
+                candidates.extend(
+                    self._collect_amount_candidates(
+                        item,
+                        include_generic_amount=include_generic_amount,
+                        include_stake_amount=include_stake_amount,
+                    )
+                )
         return candidates
 
     def _classify_action_type(self, pallet: str, call_name: str) -> str:
@@ -903,11 +945,15 @@ class SubtensorMonitor:
         failure_reason: str | None,
     ) -> str:
         # 消息内容直接面向 TG 和网页弹窗，所以把调用、状态、关联地址和命中原因都写清楚。
+        action_type = self._classify_action_type(leaf_call.pallet, leaf_call.call_name)
         signal = self._build_trade_signal(
-            action_type=self._classify_action_type(leaf_call.pallet, leaf_call.call_name),
+            action_type=action_type,
             amount_tao=amount_tao,
             params=leaf_call.params,
         )
+        amount_label = f"{amount_tao:.6f} TAO"
+        if amount_tao <= 0 and action_type in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
+            amount_label = "未确认 TAO 成交额（链上参数多为 Alpha 数量）"
         tags: list[str] = []
         if watched:
             tags.append(f"监控钱包: {', '.join(matched_aliases)}")
@@ -926,7 +972,7 @@ class SubtensorMonitor:
             f"区块: <code>{block_number}</code>",
             f"Extrinsic: <code>{extrinsic_index}</code>",
             f"签名者: <code>{signer_address or '-'}</code>",
-            f"金额估值: <b>{amount_tao:.6f} TAO</b>",
+            f"金额估值: <b>{amount_label}</b>",
             f"主路径: <code>{primary_from or '-'} -> {primary_to or '-'}</code>",
             f"关联地址: <code>{', '.join(involved_addresses[:8]) if involved_addresses else '-'}</code>",
         ]
