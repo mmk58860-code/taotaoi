@@ -137,6 +137,7 @@ class SubtensorMonitor:
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._wakeup_event = asyncio.Event()
+        self._scan_lock = asyncio.Lock()
         self._notifier = TelegramNotifier()
         self._last_reconciled_finalized_block = 0
         self._substrate: SubstrateInterface | None = None
@@ -161,13 +162,14 @@ class SubtensorMonitor:
 
     async def restart(self) -> None:
         # 配置保存后唤醒当前循环，让新设置尽快生效。
+        self._close_substrate()
         self._wakeup_event.set()
 
     async def _run(self) -> None:
-        # 后台常驻循环：扫描链、记录错误、按配置间隔休眠。
+        # 后台常驻循环：优先订阅新块头，订阅失败时再用短间隔轮询兜底。
         while not self._stop_event.is_set():
             try:
-                await self._scan_once()
+                await self._run_new_head_subscription()
             except Exception as exc:
                 logger.exception("monitor loop failed")
                 self._close_substrate()
@@ -179,13 +181,6 @@ class SubtensorMonitor:
                 await asyncio.sleep(10)
                 continue
 
-            wait_seconds = self._current_poll_interval()
-            try:
-                await asyncio.wait_for(self._wakeup_event.wait(), timeout=wait_seconds)
-            except asyncio.TimeoutError:
-                pass
-            self._wakeup_event.clear()
-
     def _current_poll_interval(self) -> int:
         # 链路级扫描间隔属于系统配置，只需读取一次总管理员维护的设置。
         with session_scope() as session:
@@ -193,8 +188,65 @@ class SubtensorMonitor:
         settings = typed_system_runtime_settings(raw)
         return int(settings["poll_interval_seconds"])
 
-    async def _scan_once(self) -> None:
+    async def _run_new_head_subscription(self) -> None:
+        # 启动时先追到当前最新块，然后等待链节点推送新块头。
+        with session_scope() as session:
+            raw_settings = get_system_runtime_settings(session)
+        typed = typed_system_runtime_settings(raw_settings)
+        url = str(typed["subtensor_ws_url"])
+
+        await self._scan_once()
+        loop = asyncio.get_running_loop()
+
+        def subscription_worker() -> None:
+            subscription_substrate = SubstrateInterface(url=url)
+
+            def on_new_head(obj: Any, update_nr: int, subscription_id: str) -> dict[str, Any] | None:
+                if self._stop_event.is_set():
+                    return {"status": "监听已停止"}
+                if self._wakeup_event.is_set():
+                    return {"status": "配置已重新加载"}
+
+                block_number = self._header_block_number(obj)
+                if block_number <= 0:
+                    return None
+
+                future = asyncio.run_coroutine_threadsafe(self._scan_once(triggered_head_block=block_number), loop)
+                future.result()
+                return None
+
+            try:
+                subscription_substrate.subscribe_block_headers(on_new_head)
+            finally:
+                close = getattr(subscription_substrate, "close", None)
+                if callable(close):
+                    with suppress(Exception):
+                        close()
+
+        try:
+            await asyncio.to_thread(subscription_worker)
+        except Exception:
+            logger.exception("新块头订阅失败，改用备用轮询")
+            await self._run_polling_fallback()
+        finally:
+            self._wakeup_event.clear()
+
+    async def _run_polling_fallback(self) -> None:
+        # 免费节点偶尔会断开订阅；这里用短间隔轮询顶上，下一轮再尝试恢复订阅。
+        while not self._stop_event.is_set() and not self._wakeup_event.is_set():
+            await self._scan_once()
+            wait_seconds = self._current_poll_interval()
+            try:
+                await asyncio.wait_for(self._wakeup_event.wait(), timeout=wait_seconds)
+            except asyncio.TimeoutError:
+                return
+
+    async def _scan_once(self, triggered_head_block: int | None = None) -> None:
         # 先处理最新可见区块争取首见，再用最终确认区块补漏校对。
+        async with self._scan_lock:
+            await self._scan_once_locked(triggered_head_block=triggered_head_block)
+
+    async def _scan_once_locked(self, triggered_head_block: int | None = None) -> None:
         with session_scope() as session:
             raw_settings = get_system_runtime_settings(session)
             typed = typed_system_runtime_settings(raw_settings)
@@ -218,7 +270,10 @@ class SubtensorMonitor:
             state.last_error = None
 
         substrate = self._get_substrate(str(typed["subtensor_ws_url"]))
-        latest_head_block = await asyncio.to_thread(self._get_latest_head_block, substrate)
+        if triggered_head_block is None:
+            latest_head_block = await asyncio.to_thread(self._get_latest_head_block, substrate)
+        else:
+            latest_head_block = int(triggered_head_block)
         finalized_block = await asyncio.to_thread(self._get_latest_finalized_block, substrate)
         finalized_target = max(0, int(finalized_block) - int(typed["finality_lag_blocks"]))
 
@@ -991,6 +1046,25 @@ class SubtensorMonitor:
         except Exception:
             logger.exception("读取最新块头失败，退回使用最终确认块")
             return self._get_latest_finalized_block(substrate)
+
+    def _header_block_number(self, payload: Any) -> int:
+        # 新块头订阅返回的结构在不同版本里略有差异，这里统一提取区块高度。
+        normalized = self._normalize_value(payload)
+        if isinstance(normalized, dict):
+            candidates = (
+                normalized.get("number"),
+                normalized.get("block_number"),
+                normalized.get("header", {}).get("number") if isinstance(normalized.get("header"), dict) else None,
+                normalized.get("params", {}).get("result", {}).get("number")
+                if isinstance(normalized.get("params"), dict) and isinstance(normalized.get("params", {}).get("result"), dict)
+                else None,
+            )
+            for candidate in candidates:
+                number = self._to_int(candidate)
+                if number is not None:
+                    return number
+        number = self._to_int(normalized)
+        return int(number or 0)
 
     def _normalize_value(self, value: Any) -> Any:
         # 尽量把 substrate-interface 的对象递归转换成普通 Python 数据。
