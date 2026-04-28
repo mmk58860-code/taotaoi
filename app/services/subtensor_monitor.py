@@ -432,7 +432,12 @@ class SubtensorMonitor:
                         and profile.threshold_tao > 0
                         and amount_tao >= profile.threshold_tao
                     )
-                    if not watched and not above_threshold:
+                    unresolved_sell = (
+                        profile.menu_kind == BUILTIN_ALERT_KIND
+                        and action_type in {"stake_remove", "stake_swap"}
+                        and amount_tao <= 0
+                    )
+                    if not watched and not above_threshold and not unresolved_sell:
                         continue
 
                     primary_from, primary_to = self._pick_primary_route(
