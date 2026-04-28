@@ -773,7 +773,23 @@ class SubtensorMonitor:
                 parsed = self._to_int(event_values[tao_index])
                 if parsed is not None and parsed > 0:
                     candidates.append(parsed)
+            candidates.extend(self._collect_named_settlement_amounts(event.attributes))
             candidates.extend(self._collect_tao_amount_candidates(event.payload))
+        return candidates
+
+    def _collect_named_settlement_amounts(self, payload: Any) -> list[int]:
+        # 有些节点把 StakeRemoved/StakeSwapped 等事件参数返回成命名 dict，amount 就是官方 TaoBalance。
+        normalized = self._normalize_value(payload)
+        candidates: list[int] = []
+        if isinstance(normalized, dict):
+            for key in ("amount", "tao_amount", "tao", "rao"):
+                parsed = self._to_int(normalized.get(key))
+                if parsed is not None and parsed > 0:
+                    candidates.append(parsed)
+            for key in ("attributes", "params", "args", "data", "values"):
+                value = normalized.get(key)
+                if isinstance(value, dict):
+                    candidates.extend(self._collect_named_settlement_amounts(value))
         return candidates
 
     def _event_attribute_values(self, payload: Any) -> list[Any]:

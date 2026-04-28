@@ -393,6 +393,22 @@ def collect_settlement_tao_from_events(action_type: str, related_events) -> list
             parsed = to_int(values[tao_index])
             if parsed is not None and parsed > 0:
                 results.append(parsed)
+        results.extend(collect_named_settlement_amounts(event))
+    return results
+
+
+def collect_named_settlement_amounts(payload) -> list[int]:
+    # 有些节点把质押结算事件返回成命名字段，amount 在这些事件里就是官方 TaoBalance。
+    results: list[int] = []
+    if isinstance(payload, dict):
+        for key in ("amount", "tao_amount", "tao", "rao"):
+            parsed = to_int(payload.get(key))
+            if parsed is not None and parsed > 0:
+                results.append(parsed)
+        for key in ("attributes", "params", "args", "data", "values"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                results.extend(collect_named_settlement_amounts(value))
     return results
 
 
