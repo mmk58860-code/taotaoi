@@ -868,6 +868,11 @@ class SubtensorMonitor:
         failure_reason: str | None,
     ) -> str:
         # 消息内容直接面向 TG 和网页弹窗，所以把调用、状态、关联地址和命中原因都写清楚。
+        signal = self._build_trade_signal(
+            action_type=self._classify_action_type(leaf_call.pallet, leaf_call.call_name),
+            amount_tao=amount_tao,
+            params=leaf_call.params,
+        )
         tags: list[str] = []
         if watched:
             tags.append(f"监控钱包: {', '.join(matched_aliases)}")
@@ -880,6 +885,9 @@ class SubtensorMonitor:
             f"<b>{title}</b>",
             f"状态: <b>{'成功' if success else '失败'}</b>",
             f"调用: <code>{leaf_call.pallet}.{leaf_call.call_name}</code>",
+            f"子网: <b>{signal['subnet_label']}</b>",
+            f"方向: <b>{signal['direction']}</b>",
+            f"信号: <b>{signal['signal']}</b>",
             f"区块: <code>{block_number}</code>",
             f"Extrinsic: <code>{extrinsic_index}</code>",
             f"签名者: <code>{signer_address or '-'}</code>",
@@ -892,6 +900,64 @@ class SubtensorMonitor:
         if failure_reason:
             lines.append(f"失败原因: <code>{failure_reason}</code>")
         return "\n".join(lines)
+
+    def _build_trade_signal(self, action_type: str, amount_tao: float, params: Any) -> dict[str, str]:
+        # 把底层链上动作翻译成更接近短线交易判断的中文信号。
+        subnet_ids = self._extract_subnet_ids(params)
+        subnet_label = "未知" if not subnet_ids else "、".join(f"子网 {netuid}" for netuid in subnet_ids[:3])
+        direction_map = {
+            "stake_add": "买入 / 加仓",
+            "stake_remove": "卖出 / 减仓",
+            "stake_move": "迁移仓位",
+            "stake_transfer": "转移仓位",
+            "stake_swap": "换仓",
+            "swap_call": "兑换",
+            "liquidity_manage": "流动性操作",
+            "subnet_register": "子网注册",
+            "subnet_manage": "子网管理",
+            "transfer": "资金转移",
+        }
+        direction = direction_map.get(action_type, "链上动作")
+
+        if action_type in {"stake_add", "stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
+            if amount_tao >= 100:
+                signal = f"大额{direction}"
+            elif amount_tao >= 10:
+                signal = f"中额{direction}"
+            elif amount_tao > 0:
+                signal = f"小额{direction}"
+            else:
+                signal = direction
+        elif action_type == "transfer" and amount_tao >= 100:
+            signal = "大额资金转移"
+        else:
+            signal = direction
+
+        return {
+            "subnet_label": subnet_label,
+            "direction": direction,
+            "signal": signal,
+        }
+
+    def _extract_subnet_ids(self, payload: Any) -> list[int]:
+        # 常见字段包括 netuid、subnet、network，递归提取后去重。
+        normalized = self._normalize_value(payload)
+        results: list[int] = []
+        subnet_keys = ("netuid", "subnet", "network", "destination_netuid", "origin_netuid")
+
+        if isinstance(normalized, dict):
+            for key, value in normalized.items():
+                key_text = str(key).lower()
+                if any(token in key_text for token in subnet_keys):
+                    parsed = self._to_int(value)
+                    if parsed is not None and 0 <= parsed <= 10_000:
+                        results.append(parsed)
+                results.extend(self._extract_subnet_ids(value))
+        elif isinstance(normalized, list):
+            for item in normalized:
+                results.extend(self._extract_subnet_ids(item))
+
+        return list(dict.fromkeys(results))
 
     async def _persist_and_notify(self, actions: list[ActionRecord]) -> None:
         # 先按账号入库去重，再分别推送到各自的 Telegram。

@@ -708,14 +708,42 @@ input {
 }
 
 .event-col-amount {
-  white-space: nowrap;
   font-weight: 700;
+}
+
+.amount-main,
+.signal-main,
+.signal-sub {
+  display: block;
+}
+
+.amount-main {
+  white-space: nowrap;
+}
+
+.signal-sub {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 500;
 }
 
 .event-col-route {
   line-height: 1.45;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.signal-badge {
+  display: inline-flex;
+  width: fit-content;
+  margin-bottom: 5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(20, 184, 166, 0.12);
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-weight: 800;
 }
 
 .route-line {

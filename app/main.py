@@ -233,6 +233,86 @@ def action_label(event: ChainEvent) -> str:
     return label
 
 
+def event_trade_signal(event: ChainEvent) -> dict[str, str]:
+    # 不改数据库结构，直接从原始链上参数里提取短线交易需要看的字段。
+    try:
+        raw = json.loads(event.raw_payload or "{}")
+    except Exception:
+        raw = {}
+    params = raw.get("leaf_call", raw)
+    subnet_ids = extract_subnet_ids(params)
+    subnet_label = "未知子网" if not subnet_ids else "、".join(f"子网 {netuid}" for netuid in subnet_ids[:3])
+    direction_map = {
+        "stake_add": "买入 / 加仓",
+        "stake_remove": "卖出 / 减仓",
+        "stake_move": "迁移仓位",
+        "stake_transfer": "转移仓位",
+        "stake_swap": "换仓",
+        "swap_call": "兑换",
+        "liquidity_manage": "流动性操作",
+        "subnet_register": "子网注册",
+        "subnet_manage": "子网管理",
+        "transfer": "资金转移",
+    }
+    direction = direction_map.get(event.action_type, "链上动作")
+
+    if event.action_type in {"stake_add", "stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
+        if event.amount_tao >= 100:
+            signal = f"大额{direction}"
+        elif event.amount_tao >= 10:
+            signal = f"中额{direction}"
+        elif event.amount_tao > 0:
+            signal = f"小额{direction}"
+        else:
+            signal = direction
+    elif event.action_type == "transfer" and event.amount_tao >= 100:
+        signal = "大额资金转移"
+    else:
+        signal = direction
+
+    return {
+        "subnet": subnet_label,
+        "direction": direction,
+        "signal": signal,
+    }
+
+
+def extract_subnet_ids(payload) -> list[int]:
+    # 常见字段包括 netuid、subnet、network，递归提取后去重。
+    results: list[int] = []
+    subnet_keys = ("netuid", "subnet", "network", "destination_netuid", "origin_netuid")
+
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            key_text = str(key).lower()
+            if any(token in key_text for token in subnet_keys):
+                parsed = to_int(value)
+                if parsed is not None and 0 <= parsed <= 10_000:
+                    results.append(parsed)
+            results.extend(extract_subnet_ids(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            results.extend(extract_subnet_ids(item))
+
+    return list(dict.fromkeys(results))
+
+
+def to_int(value) -> int | None:
+    # 链上参数里数字可能是 int、十六进制字符串或普通字符串。
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value, 16) if value.startswith("0x") else int(value)
+        except ValueError:
+            return None
+    if isinstance(value, dict) and "value" in value:
+        return to_int(value.get("value"))
+    return None
+
+
 def parse_menu_data_import(file_bytes: bytes) -> dict[str, object]:
     # 资料导入只接受项目自己导出的 JSON，避免字段不一致导致误导入。
     try:
@@ -567,6 +647,7 @@ async def dashboard(request: Request):
             "current_is_superadmin": is_superadmin(request),
             "to_beijing_string": to_beijing_string,
             "action_label": action_label,
+            "event_trade_signal": event_trade_signal,
         },
     )
 
@@ -618,7 +699,9 @@ async def api_state(request: Request) -> JSONResponse:
                 {
                     "id": row.id,
                     "block_number": row.block_number,
+                    "action": action_label(row),
                     "amount_tao": row.amount_tao,
+                    "trade_signal": event_trade_signal(row),
                     "message": row.message,
                     "detected_at": to_beijing_iso(row.detected_at),
                 }
