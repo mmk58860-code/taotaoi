@@ -469,6 +469,12 @@ class SubtensorMonitor:
                         "action_type": action_type,
                         "involved_addresses": involved_addresses,
                     }
+                    should_notify = self._should_notify_action(
+                        profile=profile,
+                        action_type=action_type,
+                        watched=watched,
+                        above_threshold=above_threshold,
+                    )
                     results.append(
                         ActionRecord(
                             monitor_menu_id=monitor_menu_id,
@@ -492,7 +498,7 @@ class SubtensorMonitor:
                             matched_aliases=matched_aliases,
                             message=message,
                             raw_payload=json.dumps(raw_payload, ensure_ascii=False, default=str),
-                            should_notify=bool(profile.telegram_bot_token and profile.telegram_chat_id),
+                            should_notify=should_notify,
                             telegram_bot_token=profile.telegram_bot_token,
                             telegram_chat_id=profile.telegram_chat_id,
                         )
@@ -818,6 +824,22 @@ class SubtensorMonitor:
     def _should_ignore_action(self, action_type: str) -> bool:
         # 当前项目主要服务 TAO 交易，默认忽略 EVM 噪音；后续如有需要再做成开关。
         return action_type in IGNORED_ACTION_TYPES
+
+    def _should_notify_action(
+        self,
+        profile: NotificationProfile,
+        action_type: str,
+        watched: bool,
+        above_threshold: bool,
+    ) -> bool:
+        # 普通转账容易刷屏，默认只入库不推 TG；非监控钱包只有达到大额阈值才推。
+        if not profile.telegram_bot_token or not profile.telegram_chat_id:
+            return False
+        if action_type == "transfer":
+            return False
+        if watched:
+            return True
+        return above_threshold
 
     def _collect_aliases(
         self,
