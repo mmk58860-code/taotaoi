@@ -132,6 +132,6 @@ def typed_system_runtime_settings(raw: Mapping[str, str]) -> dict[str, str | int
     return {
         "subtensor_ws_url": raw.get("subtensor_ws_url", ""),
         "network_name": raw.get("network_name", "finney"),
-        "poll_interval_seconds": int(raw.get("poll_interval_seconds", "2")),
+        "poll_interval_seconds": int(raw.get("poll_interval_seconds", "1")),
         "finality_lag_blocks": int(raw.get("finality_lag_blocks", "0")),
     }

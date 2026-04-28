@@ -139,6 +139,8 @@ class SubtensorMonitor:
         self._wakeup_event = asyncio.Event()
         self._notifier = TelegramNotifier()
         self._last_reconciled_finalized_block = 0
+        self._substrate: SubstrateInterface | None = None
+        self._substrate_url = ""
 
     async def start(self) -> None:
         # 避免重复创建监听任务。
@@ -155,6 +157,7 @@ class SubtensorMonitor:
             self._task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._task
+        self._close_substrate()
 
     async def restart(self) -> None:
         # 配置保存后唤醒当前循环，让新设置尽快生效。
@@ -167,6 +170,7 @@ class SubtensorMonitor:
                 await self._scan_once()
             except Exception as exc:
                 logger.exception("monitor loop failed")
+                self._close_substrate()
                 with session_scope() as session:
                     state = ensure_state(session)
                     state.monitor_status = "error"
@@ -213,7 +217,7 @@ class SubtensorMonitor:
             state.monitor_status = "running"
             state.last_error = None
 
-        substrate = SubstrateInterface(url=str(typed["subtensor_ws_url"]))
+        substrate = self._get_substrate(str(typed["subtensor_ws_url"]))
         latest_head_block = await asyncio.to_thread(self._get_latest_head_block, substrate)
         finalized_block = await asyncio.to_thread(self._get_latest_finalized_block, substrate)
         finalized_target = max(0, int(finalized_block) - int(typed["finality_lag_blocks"]))
@@ -285,6 +289,24 @@ class SubtensorMonitor:
         for row in wallet_rows:
             watch_map.setdefault(row.address, {}).setdefault(row.monitor_menu_id, []).append(row.alias)
         return watch_map
+
+    def _get_substrate(self, url: str) -> SubstrateInterface:
+        # 快速监听模式复用同一条链节点连接，避免每轮扫描都重新握手。
+        if self._substrate is None or self._substrate_url != url:
+            self._close_substrate()
+            self._substrate = SubstrateInterface(url=url)
+            self._substrate_url = url
+        return self._substrate
+
+    def _close_substrate(self) -> None:
+        # 不同版本的底层连接关闭方法不完全一致，所以这里做兼容处理。
+        substrate = self._substrate
+        self._substrate = None
+        self._substrate_url = ""
+        close = getattr(substrate, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
 
     def _extract_actions_sync(
         self,

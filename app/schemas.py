@@ -13,7 +13,7 @@ class WalletCreate(BaseModel):
 class SystemSettingsUpdate(BaseModel):
     subtensor_ws_url: str
     network_name: str
-    poll_interval_seconds: int = Field(ge=2, le=120)
+    poll_interval_seconds: int = Field(ge=1, le=120)
     finality_lag_blocks: int = Field(ge=0, le=20)
 
 

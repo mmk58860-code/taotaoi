@@ -21,7 +21,7 @@ class Settings(BaseSettings):
         alias="SUBTENSOR_WS_URL",
     )
     network_name: str = Field(default="finney", alias="NETWORK_NAME")
-    poll_interval_seconds: int = Field(default=2, alias="POLL_INTERVAL_SECONDS")
+    poll_interval_seconds: int = Field(default=1, alias="POLL_INTERVAL_SECONDS")
     finality_lag_blocks: int = Field(default=0, alias="FINALITY_LAG_BLOCKS")
     large_transfer_threshold_tao: float = Field(default=5.0, alias="LARGE_TRANSFER_THRESHOLD_TAO")
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
