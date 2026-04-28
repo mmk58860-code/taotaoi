@@ -716,8 +716,6 @@ class SubtensorMonitor:
 
         amount_candidates: list[int] = []
         amount_candidates.extend(self._collect_amount_candidates(leaf_call.params))
-        for event in related_events:
-            amount_candidates.extend(self._collect_amount_candidates(event.attributes))
 
         if not amount_candidates:
             return 0.0
@@ -730,20 +728,22 @@ class SubtensorMonitor:
         candidates: list[int] = []
         amountish_keys = (
             "amount",
-            "value",
             "stake",
             "stake_amount",
             "tao",
             "tao_amount",
-            "alpha",
-            "alpha_amount",
             "burn",
             "fee",
             "cost",
-            "price",
+            "rao",
         )
 
         if isinstance(normalized, dict):
+            param_name = str(normalized.get("name", normalized.get("param", ""))).lower()
+            if any(token in param_name for token in amountish_keys):
+                parsed = self._to_int(normalized.get("value"))
+                if parsed is not None and parsed > 0:
+                    candidates.append(parsed)
             for key, value in normalized.items():
                 key_text = str(key).lower()
                 if any(token in key_text for token in amountish_keys):

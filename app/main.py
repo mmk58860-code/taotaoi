@@ -235,6 +235,7 @@ def action_label(event: ChainEvent) -> str:
 
 def event_trade_signal(event: ChainEvent) -> dict[str, str]:
     # 不改数据库结构，直接从原始链上参数里提取短线交易需要看的字段。
+    normalized_amount = normalized_trade_amount_tao(event)
     direction_map = {
         "stake_add": "买入 / 加仓",
         "stake_remove": "卖出 / 减仓",
@@ -257,15 +258,15 @@ def event_trade_signal(event: ChainEvent) -> dict[str, str]:
         subnet_label = subnet_label_for_action(event.action_type, [])
 
     if event.action_type in {"stake_add", "stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
-        if event.amount_tao >= 100:
+        if normalized_amount >= 100:
             signal = f"大额{direction}"
-        elif event.amount_tao >= 10:
+        elif normalized_amount >= 10:
             signal = f"中额{direction}"
-        elif event.amount_tao > 0:
+        elif normalized_amount > 0:
             signal = f"小额{direction}"
         else:
             signal = direction
-    elif event.action_type == "transfer" and event.amount_tao >= 100:
+    elif event.action_type == "transfer" and normalized_amount >= 100:
         signal = "大额资金转移"
     else:
         signal = direction
@@ -275,6 +276,21 @@ def event_trade_signal(event: ChainEvent) -> dict[str, str]:
         "direction": direction,
         "signal": signal,
     }
+
+
+def normalized_trade_amount_tao(event: ChainEvent) -> float:
+    # 历史记录可能用旧规则把 alpha/price 误算成 TAO，这里展示信号时重新按调用参数估值。
+    try:
+        raw = json.loads(event.raw_payload or "{}")
+    except Exception:
+        return float(event.amount_tao or 0)
+    if not isinstance(raw, dict):
+        return float(event.amount_tao or 0)
+    params = raw.get("leaf_call", raw)
+    candidates = collect_amount_candidates(params)
+    if not candidates:
+        return 0.0
+    return round(max(candidates) / 1_000_000_000, 9)
 
 
 def subnet_label_for_action(action_type: str, subnet_ids: list[int]) -> str:
@@ -309,6 +325,29 @@ def extract_subnet_ids(payload) -> list[int]:
             results.extend(extract_subnet_ids(item))
 
     return list(dict.fromkeys(results))
+
+
+def collect_amount_candidates(payload) -> list[int]:
+    # 页面展示用的保守 TAO 金额提取，避免把 alpha/price/value 误当成 TAO。
+    results: list[int] = []
+    amount_keys = ("amount", "stake", "stake_amount", "tao", "tao_amount", "burn", "fee", "cost", "rao")
+    if isinstance(payload, dict):
+        param_name = str(payload.get("name", payload.get("param", ""))).lower()
+        if any(token in param_name for token in amount_keys):
+            parsed = to_int(payload.get("value"))
+            if parsed is not None and parsed > 0:
+                results.append(parsed)
+        for key, value in payload.items():
+            key_text = str(key).lower()
+            if any(token in key_text for token in amount_keys):
+                parsed = to_int(value)
+                if parsed is not None and parsed > 0:
+                    results.append(parsed)
+            results.extend(collect_amount_candidates(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            results.extend(collect_amount_candidates(item))
+    return results
 
 
 def to_int(value) -> int | None:
