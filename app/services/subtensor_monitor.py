@@ -402,7 +402,11 @@ class SubtensorMonitor:
                 continue
 
             for leaf_call in leaf_calls:
-                involved_addresses = self._build_involved_addresses(leaf_call, extrinsic_payload["signer_address"])
+                involved_addresses = self._build_involved_addresses(
+                    leaf_call,
+                    extrinsic_payload["signer_address"],
+                    related_events,
+                )
                 amount_tao = self._estimate_amount_tao(leaf_call, related_events)
                 action_type = self._classify_action_type(leaf_call.pallet, leaf_call.call_name)
                 if self._should_ignore_action(action_type):
@@ -680,13 +684,22 @@ class SubtensorMonitor:
 
         return []
 
-    def _build_involved_addresses(self, leaf_call: CallEnvelope, signer_address: str | None) -> list[str]:
-        # 所有关联地址都从 signer、显式命名参数和递归扫描结果里汇总。
+    def _build_involved_addresses(
+        self,
+        leaf_call: CallEnvelope,
+        signer_address: str | None,
+        related_events: list[EventEnvelope],
+    ) -> list[str]:
+        # 所有关联地址都从 signer、调用参数和事件结果里汇总，避免钱包只出现在 event 里时漏报。
         addresses: list[str] = []
         if signer_address:
             addresses.append(signer_address)
         addresses.extend(value for value in leaf_call.role_addresses.values() if self._looks_like_address(value))
         addresses.extend(self._collect_addresses(leaf_call.params))
+        addresses.extend(self._collect_addresses(leaf_call.raw_payload))
+        for event in related_events:
+            addresses.extend(self._collect_addresses(event.attributes))
+            addresses.extend(self._collect_addresses(event.payload))
         return list(dict.fromkeys(addresses))
 
     def _estimate_amount_tao(self, leaf_call: CallEnvelope, related_events: list[EventEnvelope]) -> float:
