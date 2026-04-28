@@ -303,21 +303,23 @@ def normalized_trade_amount_tao(event: ChainEvent) -> float:
     if action_type in {"weights_set", "weights_commit", "weights_reveal", "children_set", "identity_set"}:
         return 0.0
 
+    candidates = collect_settlement_tao_from_events(action_type, related_events)
     if action_type == "transfer":
-        candidates = collect_amount_candidates(params, include_generic_amount=True)
+        candidates.extend(collect_amount_candidates(params, include_generic_amount=True))
     elif action_type == "stake_add":
-        candidates = collect_amount_candidates(
-            params,
-            include_generic_amount=True,
-            include_stake_amount=True,
+        candidates.extend(
+            collect_amount_candidates(
+                params,
+                include_generic_amount=True,
+                include_stake_amount=True,
+            )
         )
     elif action_type in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
-        candidates = []
         if isinstance(related_events, list):
             for related_event in related_events:
                 candidates.extend(collect_tao_amount_candidates(related_event))
     else:
-        candidates = collect_tao_amount_candidates(params)
+        candidates.extend(collect_tao_amount_candidates(params))
     if not candidates:
         return 0.0
     return round(max(candidates) / 1_000_000_000, 9)
@@ -360,6 +362,70 @@ def extract_subnet_ids(payload) -> list[int]:
 def collect_tao_amount_candidates(payload) -> list[int]:
     # 只吃明确带 TAO/rao/手续费/销毁成本的字段；不把普通 amount 当 TAO。
     return collect_amount_candidates(payload)
+
+
+def collect_settlement_tao_from_events(action_type: str, related_events) -> list[int]:
+    # Subtensor 质押事件的 TAO 结算字段常常按固定位置出现，不一定有 tao 字段名。
+    if not isinstance(related_events, list):
+        return []
+    event_tao_index = {
+        "stakeadded": 2,
+        "stakeremoved": 2,
+        "stakemoved": 5,
+        "staketransferred": 5,
+        "stakeswapped": 4,
+    }
+    expected_events = {
+        "stake_add": {"stakeadded"},
+        "stake_remove": {"stakeremoved"},
+        "stake_move": {"stakemoved"},
+        "stake_transfer": {"staketransferred"},
+        "stake_swap": {"stakeswapped"},
+    }.get(action_type, set())
+    results: list[int] = []
+    for event in related_events:
+        event_name = event_name_from_payload(event).lower()
+        if expected_events and event_name not in expected_events:
+            continue
+        values = event_attribute_values(event)
+        tao_index = event_tao_index.get(event_name)
+        if tao_index is not None and len(values) > tao_index:
+            parsed = to_int(values[tao_index])
+            if parsed is not None and parsed > 0:
+                results.append(parsed)
+    return results
+
+
+def event_name_from_payload(payload) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("event_id", "event", "name"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    nested = payload.get("event")
+    if isinstance(nested, dict):
+        return event_name_from_payload(nested)
+    return ""
+
+
+def event_attribute_values(payload) -> list:
+    if isinstance(payload, dict):
+        for key in ("attributes", "params", "args", "data", "values"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return event_attribute_values(value)
+        if all(str(key).isdigit() for key in payload):
+            return [payload[key] for key in sorted(payload, key=lambda item: int(str(item)))]
+    if isinstance(payload, list):
+        values = []
+        for item in payload:
+            if isinstance(item, dict) and "value" in item:
+                values.append(item.get("value"))
+            else:
+                values.append(item)
+        return values
+    return []
 
 
 def collect_amount_candidates(

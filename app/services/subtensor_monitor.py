@@ -716,6 +716,7 @@ class SubtensorMonitor:
             return 0.0
 
         amount_candidates: list[int] = []
+        amount_candidates.extend(self._collect_settlement_tao_from_events(action_type, related_events))
         if action_type == "transfer":
             amount_candidates.extend(self._collect_amount_candidates(leaf_call.params, include_generic_amount=True))
         elif action_type == "stake_add":
@@ -741,6 +742,61 @@ class SubtensorMonitor:
     def _collect_tao_amount_candidates(self, payload: Any) -> list[int]:
         # 只提取明确写着 TAO/rao/手续费/销毁成本的字段；不吃泛泛的 amount/stake。
         return self._collect_amount_candidates(payload)
+
+    def _collect_settlement_tao_from_events(
+        self,
+        action_type: str,
+        related_events: list[EventEnvelope],
+    ) -> list[int]:
+        # Subtensor 的质押结算事件很多是按位置编码的，字段名不一定带 tao。
+        # 这里按官方事件定义读取 TAO 结算位，避免继续显示“未确认 TAO 成交额”。
+        event_tao_index = {
+            "stakeadded": 2,
+            "stakeremoved": 2,
+            "stakemoved": 5,
+            "staketransferred": 5,
+            "stakeswapped": 4,
+        }
+        expected_events = {
+            "stake_add": {"stakeadded"},
+            "stake_remove": {"stakeremoved"},
+            "stake_move": {"stakemoved"},
+            "stake_transfer": {"staketransferred"},
+            "stake_swap": {"stakeswapped"},
+        }.get(action_type, set())
+        candidates: list[int] = []
+        for event in related_events:
+            event_name = event.event_name.lower()
+            if expected_events and event_name not in expected_events:
+                continue
+            event_values = self._event_attribute_values(event.attributes)
+            tao_index = event_tao_index.get(event_name)
+            if tao_index is not None and len(event_values) > tao_index:
+                parsed = self._to_int(event_values[tao_index])
+                if parsed is not None and parsed > 0:
+                    candidates.append(parsed)
+            candidates.extend(self._collect_tao_amount_candidates(event.payload))
+        return candidates
+
+    def _event_attribute_values(self, payload: Any) -> list[Any]:
+        # substrate-interface 不同版本可能返回 list，也可能返回带 attributes/args 的 dict。
+        normalized = self._normalize_value(payload)
+        if isinstance(normalized, list):
+            values: list[Any] = []
+            for item in normalized:
+                if isinstance(item, dict) and "value" in item:
+                    values.append(item.get("value"))
+                else:
+                    values.append(item)
+            return values
+        if isinstance(normalized, dict):
+            for key in ("attributes", "args", "data", "values"):
+                value = normalized.get(key)
+                if isinstance(value, list):
+                    return self._event_attribute_values(value)
+            if all(str(key).isdigit() for key in normalized):
+                return [normalized[key] for key in sorted(normalized, key=lambda item: int(str(item)))]
+        return []
 
     def _collect_amount_candidates(
         self,
