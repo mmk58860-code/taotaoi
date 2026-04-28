@@ -232,7 +232,7 @@ class SubtensorMonitor:
             self._wakeup_event.clear()
 
     async def _run_polling_fallback(self) -> None:
-        # 免费节点偶尔会断开订阅；这里用短间隔轮询顶上，下一轮再尝试恢复订阅。
+        # 免费节点偶尔会断开订阅；这里按系统设置的备用间隔轮询顶上，下一轮再尝试恢复订阅。
         while not self._stop_event.is_set() and not self._wakeup_event.is_set():
             await self._scan_once()
             wait_seconds = self._current_poll_interval()
