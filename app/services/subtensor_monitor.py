@@ -778,7 +778,7 @@ class SubtensorMonitor:
         }.get(action_type, set())
         candidates: list[int] = []
         for event in related_events:
-            event_name = event.event_name.lower()
+            event_name = self._compact_name(event.event_name)
             if expected_events and event_name not in expected_events:
                 continue
             event_values = self._event_attribute_values(event.attributes)
@@ -809,7 +809,7 @@ class SubtensorMonitor:
         for event in related_events:
             if event.pallet.lower() != "balances":
                 continue
-            event_name = event.event_name.lower()
+            event_name = self._compact_name(event.event_name)
             amount_index = balance_amount_index.get(event_name)
             if amount_index is None:
                 continue
@@ -1020,6 +1020,10 @@ class SubtensorMonitor:
     def _should_ignore_action(self, action_type: str) -> bool:
         # 当前项目主要服务 TAO 交易，默认忽略 EVM 噪音；后续如有需要再做成开关。
         return action_type in IGNORED_ACTION_TYPES
+
+    def _compact_name(self, value: str) -> str:
+        # 不同 RPC/库可能返回 StakeRemoved、stake_removed 或 stake-removed，统一后再匹配。
+        return re.sub(r"[^a-z0-9]", "", str(value).lower())
 
     def _is_trade_action(self, action_type: str) -> bool:
         # 失败的交易调用没有真实成交，不能进入短线交易监控结果。
@@ -1538,6 +1542,15 @@ class SubtensorMonitor:
             return None
         if isinstance(normalized, int):
             return normalized
+        if isinstance(normalized, dict):
+            for key in ("value", "amount", "balance", "tao", "rao", "bits", "compact"):
+                if key in normalized:
+                    parsed = self._to_int(normalized.get(key))
+                    if parsed is not None:
+                        return parsed
+            return None
+        if isinstance(normalized, list) and len(normalized) == 1:
+            return self._to_int(normalized[0])
         if isinstance(normalized, str):
             digits = normalized.replace(",", "").replace("_", "")
             if digits.isdigit():
