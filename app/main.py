@@ -400,7 +400,7 @@ def collect_settlement_tao_from_events(action_type: str, related_events) -> list
     }.get(action_type, set())
     results: list[int] = []
     for event in related_events:
-        event_name = event_name_from_payload(event).lower()
+        event_name = compact_name(event_name_from_payload(event))
         if expected_events and event_name not in expected_events:
             continue
         values = event_attribute_values(event)
@@ -428,7 +428,7 @@ def collect_balance_tao_from_events(action_type: str, related_events) -> list[in
     for event in related_events:
         if event_pallet_from_payload(event).lower() != "balances":
             continue
-        event_name = event_name_from_payload(event).lower()
+        event_name = compact_name(event_name_from_payload(event))
         amount_index = balance_amount_index.get(event_name)
         if amount_index is None:
             continue
@@ -445,12 +445,29 @@ def collect_named_settlement_amounts(payload) -> list[int]:
     # 有些节点把质押结算事件返回成命名字段，amount 在这些事件里就是官方 TaoBalance。
     results: list[int] = []
     if isinstance(payload, dict):
+        settlement_keys = {
+            "amount",
+            "tao_amount",
+            "tao",
+            "rao",
+            "balance",
+            "balance_unstaked",
+            "balance_staked",
+            "balance_moved",
+            "balance_transferred",
+            "balance_swapped",
+            "tao_unstaked",
+            "tao_staked",
+            "tao_moved",
+            "tao_transferred",
+            "tao_swapped",
+        }
         marker = " ".join(str(payload.get(key, "")).lower() for key in ("name", "param", "type", "type_name"))
-        if "tao" in marker or "rao" in marker:
+        if "alpha" not in marker and ("tao" in marker or "rao" in marker or any(key in marker for key in settlement_keys)):
             parsed = to_int(payload.get("value"))
             if parsed is not None and parsed > 0:
                 results.append(parsed)
-        for key in ("amount", "tao_amount", "tao", "rao"):
+        for key in settlement_keys:
             parsed = to_int(payload.get(key))
             if parsed is not None and parsed > 0:
                 results.append(parsed)
@@ -460,7 +477,7 @@ def collect_named_settlement_amounts(payload) -> list[int]:
                 results.extend(collect_named_settlement_amounts(value))
         for key, value in payload.items():
             key_text = str(key).lower()
-            if ("tao" in key_text or "rao" in key_text or key_text == "amount") and "alpha" not in key_text:
+            if "alpha" not in key_text and ("tao" in key_text or "rao" in key_text or key_text in settlement_keys):
                 parsed = to_int(value)
                 if parsed is not None and parsed > 0:
                     results.append(parsed)
@@ -468,6 +485,10 @@ def collect_named_settlement_amounts(payload) -> list[int]:
         for item in payload:
             results.extend(collect_named_settlement_amounts(item))
     return results
+
+
+def compact_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
 
 
 def event_name_from_payload(payload) -> str:
@@ -585,13 +606,20 @@ def to_int(value) -> int | None:
         return None
     if isinstance(value, int):
         return value
+    if isinstance(value, dict):
+        for key in ("value", "amount", "balance", "tao", "rao", "bits", "compact"):
+            if key in value:
+                parsed = to_int(value.get(key))
+                if parsed is not None:
+                    return parsed
+        return None
+    if isinstance(value, list) and len(value) == 1:
+        return to_int(value[0])
     if isinstance(value, str):
         try:
             return int(value, 16) if value.startswith("0x") else int(value)
         except ValueError:
             return None
-    if isinstance(value, dict) and "value" in value:
-        return to_int(value.get("value"))
     return None
 
 
