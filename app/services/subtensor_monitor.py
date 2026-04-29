@@ -1240,37 +1240,40 @@ class SubtensorMonitor:
             return
 
         for action in self._dedupe_actions_for_owner(actions):
+            should_send = False
             with session_scope() as session:
                 exists = self._find_existing_event(session, action)
                 if exists:
-                    continue
+                    self._refresh_existing_event(exists, action)
+                    should_send = action.should_notify and not bool(exists.notification_sent)
+                else:
+                    row = ChainEvent(
+                        owner_user_id=action.owner_user_id,
+                        monitor_menu_id=action.monitor_menu_id,
+                        block_number=action.block_number,
+                        event_index=action.event_index,
+                        extrinsic_index=action.extrinsic_index,
+                        pallet=action.pallet,
+                        event_name=action.event_name,
+                        action_type=action.action_type,
+                        call_name=action.call_name,
+                        amount_tao=action.amount_tao,
+                        from_address=action.from_address,
+                        to_address=action.to_address,
+                        signer_address=action.signer_address,
+                        extrinsic_hash=action.extrinsic_hash,
+                        success=action.success,
+                        failure_reason=action.failure_reason,
+                        involved_addresses_json=json.dumps(action.involved_addresses, ensure_ascii=False),
+                        matched_aliases_json=json.dumps(action.matched_aliases, ensure_ascii=False),
+                        message=action.message,
+                        raw_payload=action.raw_payload,
+                        notification_sent=False,
+                    )
+                    session.add(row)
+                    should_send = action.should_notify
 
-                row = ChainEvent(
-                    owner_user_id=action.owner_user_id,
-                    monitor_menu_id=action.monitor_menu_id,
-                    block_number=action.block_number,
-                    event_index=action.event_index,
-                    extrinsic_index=action.extrinsic_index,
-                    pallet=action.pallet,
-                    event_name=action.event_name,
-                    action_type=action.action_type,
-                    call_name=action.call_name,
-                    amount_tao=action.amount_tao,
-                    from_address=action.from_address,
-                    to_address=action.to_address,
-                    signer_address=action.signer_address,
-                    extrinsic_hash=action.extrinsic_hash,
-                    success=action.success,
-                    failure_reason=action.failure_reason,
-                    involved_addresses_json=json.dumps(action.involved_addresses, ensure_ascii=False),
-                    matched_aliases_json=json.dumps(action.matched_aliases, ensure_ascii=False),
-                    message=action.message,
-                    raw_payload=action.raw_payload,
-                    notification_sent=False,
-                )
-                session.add(row)
-
-            if not action.should_notify:
+            if not should_send:
                 continue
 
             sent = False
@@ -1288,6 +1291,45 @@ class SubtensorMonitor:
                     stored = self._find_existing_event(session, action)
                     if stored:
                         stored.notification_sent = True
+
+    def _refresh_existing_event(self, row: ChainEvent, action: ActionRecord) -> None:
+        # 首见监听可能先入库一个没有 events 的版本；finalized 校正扫到完整数据后要能补全金额和原始 payload。
+        existing_raw = self._safe_json_loads(row.raw_payload)
+        incoming_raw = self._safe_json_loads(action.raw_payload)
+        existing_events = self._payload_event_count(existing_raw)
+        incoming_events = self._payload_event_count(incoming_raw)
+
+        row.pallet = action.pallet
+        row.event_name = action.event_name
+        row.action_type = action.action_type
+        row.call_name = action.call_name
+        row.from_address = action.from_address
+        row.to_address = action.to_address
+        row.signer_address = action.signer_address
+        row.extrinsic_hash = action.extrinsic_hash
+        row.success = action.success
+        row.failure_reason = action.failure_reason
+        row.involved_addresses_json = json.dumps(action.involved_addresses, ensure_ascii=False)
+        row.matched_aliases_json = json.dumps(action.matched_aliases, ensure_ascii=False)
+
+        if action.amount_tao > 0 or row.amount_tao <= 0:
+            row.amount_tao = action.amount_tao
+        if incoming_events >= existing_events:
+            row.raw_payload = action.raw_payload
+        if action.amount_tao > 0 or incoming_events > existing_events or not row.message:
+            row.message = action.message
+
+    def _safe_json_loads(self, payload: str) -> Any:
+        try:
+            return json.loads(payload or "{}")
+        except Exception:
+            return {}
+
+    def _payload_event_count(self, payload: Any) -> int:
+        if not isinstance(payload, dict):
+            return 0
+        related_events = payload.get("related_events")
+        return len(related_events) if isinstance(related_events, list) else 0
 
     def _dedupe_actions_for_owner(self, actions: list[ActionRecord]) -> list[ActionRecord]:
         # 同一笔链上动作可能同时命中“大额预警”和“钱包监控”，同一账号只保留一条，避免页面和 TG 重复。
