@@ -38,5 +38,6 @@ cd "$APP_DIR"
 run_as_app_user git fetch --all
 run_as_app_user git pull --ff-only
 run_as_app_user .venv/bin/pip install -r requirements.txt
+run_as_app_user .venv/bin/alembic upgrade head
 run_privileged systemctl restart tao-monitor.service
 run_privileged systemctl status tao-monitor.service --no-pager

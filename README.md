@@ -7,7 +7,7 @@
 - 监控你导入的钱包地址，并支持备注别名。
 - 扫描 TAO 链 finalized 区块中的全部 extrinsic，并自动分类为转账、质押、委托、子网、权重、代理、多签等动作。
 - 当交易涉及监控钱包时，立即记录并推送到当前账号自己的 Telegram。
-- 当交易金额大于或等于当前账号设置的阈值时，立即记录并推送到当前账号自己的 Telegram。
+- 当交易涉及监控钱包时一定推送 Telegram；其他非监控钱包交易先记录命中，暂不主动推送。
 - 通过网页管理链节点、个人 Telegram 参数、个人阈值和钱包列表。
 - 使用本机 PostgreSQL 保存配置、钱包、事件和扫描进度，更新部署时不会丢数据。
 - 提供后台账号体系：总管理员可创建普通账号给朋友使用，普通账号之间的钱包和事件互相隔离。
@@ -17,7 +17,7 @@
 ## 技术结构
 
 - `FastAPI`：网页管理台和接口服务。
-- `PostgreSQL + SQLAlchemy`：配置、钱包、事件、账号、用户通知设置、扫描状态持久化。
+- `PostgreSQL + SQLAlchemy + Alembic`：配置、钱包、事件、账号、用户通知队列、扫描状态和数据库迁移。
 - `substrate-interface`：连接 Subtensor WebSocket，逐块解码 extrinsic 和关联事件。
 - `httpx`：调用 Telegram Bot API。
 - `systemd`：Ubuntu 开机自启与自动拉起。
@@ -33,10 +33,14 @@
 ## 本地开发
 
 ```bash
+sudo apt install -y postgresql postgresql-client
+sudo -u postgres createuser taomonitor --pwprompt
+sudo -u postgres createdb -O taomonitor tao_monitor
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+alembic upgrade head
 uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
@@ -53,7 +57,7 @@ http://127.0.0.1:8080
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip git rsync zip
+sudo apt install -y python3 python3-venv python3-pip git rsync zip postgresql postgresql-client
 ```
 
 如果你是直接用 `root` 登录服务器，没有 `sudo` 也可以，命令里的 `sudo` 去掉即可。
@@ -79,15 +83,13 @@ sudo nano /opt/tao-monitor/.env
 
 - 第一次运行 `./scripts/deploy.sh` 时，脚本已经会自动创建 `.env`
 - 并且会写入网页端口、总管理员账号、总管理员密码、`SECRET_KEY`
-- 你通常只需要在这里继续补充或修改 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`SUBTENSOR_WS_URL` 等运行配置
+- 你通常只需要在这里继续补充或修改 `SUBTENSOR_WS_URL` 等运行配置；每个监控菜单自己的 Telegram 参数建议登录网页后填写
 
 至少填写这些值：
 
 ```env
 SUBTENSOR_WS_URL=wss://entrypoint-finney.opentensor.ai:443
 LARGE_TRANSFER_THRESHOLD_TAO=5
-TELEGRAM_BOT_TOKEN=你的机器人 token
-TELEGRAM_CHAT_ID=你的 chat id
 ADMIN_USERNAME=你的网页登录总管理员账号
 ADMIN_PASSWORD=你的网页登录总管理员密码
 CLEANUP_TIME=04:00
@@ -125,9 +127,9 @@ sudo systemctl enable tao-monitor.service
 
 ## 更新与数据保留
 
-- 应用数据放在 `/opt/tao-monitor/data/tao_monitor.db`
+- 应用数据放在本机 PostgreSQL 数据库 `tao_monitor`
 - 备份放在 `/opt/tao-monitor/backups/`
-- `scripts/update.sh` 在 `git pull` 前会先调用备份脚本
+- `scripts/update.sh` 在 `git pull` 前会先调用备份脚本，并在更新依赖后执行 `alembic upgrade head`
 - `data/`、`logs/`、`backups/` 默认都不纳入 Git 管理，所以更新不会覆盖资料
 - 如果你的实际部署目录不是 `/opt/tao-monitor`，下面更新命令里的路径也要一起替换
 
@@ -144,8 +146,8 @@ cd /opt/tao-monitor
 
 - 登录后台后，进入“钱包备份”区域。
 - 点击“下载当前账号的钱包备份”。
-- 浏览器会直接下载一个 CSV 文件。
-- 网页备份只包含当前账号的钱包地址、备注、开关状态和添加时间，不包含 `.env`、系统密钥、Telegram 凭据或其他账号资料。
+- 浏览器会直接下载一个 JSON 资料包。
+- 网页备份只包含当前账号当前监控菜单的钱包地址、备注和开关状态，不包含 `.env`、系统密钥、Telegram 凭据或其他账号资料。
 
 ### 命令行备份
 
@@ -156,7 +158,7 @@ cd /opt/tao-monitor
 
 默认会备份这些资料：
 
-- `data/tao_monitor.db`
+- PostgreSQL 数据库 dump：`tao_monitor.dump`
 - `.env`
 - `README.md`
 

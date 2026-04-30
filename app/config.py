@@ -15,7 +15,10 @@ class Settings(BaseSettings):
 
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
     app_port: int = Field(default=8080, alias="APP_PORT")
-    database_url: str = Field(default="sqlite:///data/tao_monitor.db", alias="DATABASE_URL")
+    database_url: str = Field(
+        default="postgresql+psycopg2://taomonitor:change-this-password@127.0.0.1:5432/tao_monitor",
+        alias="DATABASE_URL",
+    )
     subtensor_ws_url: str = Field(
         default="wss://entrypoint-finney.opentensor.ai:443",
         alias="SUBTENSOR_WS_URL",

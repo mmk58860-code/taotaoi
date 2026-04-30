@@ -13,10 +13,9 @@ from sqlalchemy import select
 from substrateinterface import SubstrateInterface
 
 from app.database import session_scope
-from app.models import ChainEvent, MonitorMenu, MonitorState, WalletWatch
+from app.models import ChainEvent, MonitorMenu, MonitorState, NotificationOutbox, WalletWatch
 from app.services.monitor_menu_service import BUILTIN_ALERT_KIND
 from app.services.settings_service import get_system_runtime_settings, typed_system_runtime_settings
-from app.services.telegram import TelegramNotifier
 
 
 logger = logging.getLogger(__name__)
@@ -138,7 +137,6 @@ class SubtensorMonitor:
         self._stop_event = asyncio.Event()
         self._wakeup_event = asyncio.Event()
         self._scan_lock = asyncio.Lock()
-        self._notifier = TelegramNotifier()
         self._last_reconciled_finalized_block = 0
         self._substrate: SubstrateInterface | None = None
         self._substrate_url = ""
@@ -1044,14 +1042,12 @@ class SubtensorMonitor:
         watched: bool,
         above_threshold: bool,
     ) -> bool:
-        # 普通转账容易刷屏，默认只入库不推 TG；非监控钱包只有达到大额阈值才推。
+        # 监控钱包命中一定推 TG；其他交易暂时只入库，不主动推送。
         if not profile.telegram_bot_token or not profile.telegram_chat_id:
-            return False
-        if action_type == "transfer":
             return False
         if watched:
             return True
-        return above_threshold
+        return False
 
     def _collect_aliases(
         self,
@@ -1235,17 +1231,17 @@ class SubtensorMonitor:
         return list(dict.fromkeys(results))
 
     async def _persist_and_notify(self, actions: list[ActionRecord]) -> None:
-        # 先按账号入库去重，再分别推送到各自的 Telegram。
+        # 先按账号入库去重，再写入 Telegram 队列；实际发送由独立 worker 负责。
         if not actions:
             return
 
         for action in self._dedupe_actions_for_owner(actions):
-            should_send = False
             with session_scope() as session:
                 exists = self._find_existing_event(session, action)
                 if exists:
                     self._refresh_existing_event(exists, action)
-                    should_send = action.should_notify and not bool(exists.notification_sent)
+                    if action.should_notify and not bool(exists.notification_sent):
+                        self._enqueue_notification(session, exists, action)
                 else:
                     row = ChainEvent(
                         owner_user_id=action.owner_user_id,
@@ -1271,26 +1267,35 @@ class SubtensorMonitor:
                         notification_sent=False,
                     )
                     session.add(row)
-                    should_send = action.should_notify
+                    session.flush()
+                    if action.should_notify:
+                        self._enqueue_notification(session, row, action)
 
-            if not should_send:
-                continue
-
-            sent = False
-            try:
-                sent = await self._notifier.send_message(
-                    token=action.telegram_bot_token,
-                    chat_id=action.telegram_chat_id,
-                    text=action.message,
-                )
-            except Exception:
-                logger.exception("telegram send failed for user %s", action.owner_user_id)
-
-            if sent:
-                with session_scope() as session:
-                    stored = self._find_existing_event(session, action)
-                    if stored:
-                        stored.notification_sent = True
+    def _enqueue_notification(self, session: Any, event: ChainEvent, action: ActionRecord) -> None:
+        # 同一条链上命中只保留一条未完成通知，避免快速监听和 finalized 校正重复推送。
+        existing = session.scalar(
+            select(NotificationOutbox).where(
+                NotificationOutbox.chain_event_id == event.id,
+                NotificationOutbox.status.in_(("pending", "retrying", "sending", "sent", "failed")),
+            )
+        )
+        if existing is not None:
+            return
+        session.add(
+            NotificationOutbox(
+                owner_user_id=action.owner_user_id,
+                monitor_menu_id=action.monitor_menu_id,
+                chain_event_id=event.id,
+                telegram_bot_token=action.telegram_bot_token,
+                telegram_chat_id=action.telegram_chat_id,
+                message=action.message,
+                status="pending",
+                attempts=0,
+                max_attempts=10,
+                next_retry_at=datetime.utcnow(),
+                last_error="",
+            )
+        )
 
     def _refresh_existing_event(self, row: ChainEvent, action: ActionRecord) -> None:
         # 首见监听可能先入库一个没有 events 的版本；finalized 校正扫到完整数据后要能补全金额和原始 payload。

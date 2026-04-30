@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -19,8 +20,8 @@ from sqlalchemy import desc, func, select
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import BASE_DIR, get_settings
-from app.database import Base, engine, run_startup_migrations, session_scope
-from app.models import AdminUser, ChainEvent, MonitorMenu, UserSetting, WalletWatch
+from app.database import session_scope
+from app.models import AdminUser, ChainEvent, MonitorMenu, NotificationOutbox, UserSetting, WalletWatch
 from app.schemas import (
     MonitorMenuCreate,
     MonitorMenuRename,
@@ -49,6 +50,7 @@ from app.services.monitor_menu_service import (
     rename_monitor_menu,
     update_menu_runtime_settings,
 )
+from app.services.notification_service import NotificationService
 from app.services.settings_service import (
     bootstrap_system_settings,
     get_system_runtime_settings,
@@ -64,6 +66,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 # 全局单例对象：监听器、TG 发送器、配置对象、模板引擎。
 monitor = SubtensorMonitor()
 cleanup_service = CleanupService()
+notification_service = NotificationService()
 notifier = TelegramNotifier()
 app_settings = get_settings()
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
@@ -73,18 +76,7 @@ BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # 先建表，再跑迁移，最后补齐默认数据，保证旧项目升级时尽量不丢资料。
-    Base.metadata.create_all(bind=engine)
-    with session_scope() as session:
-        bootstrap_system_settings(session)
-        bootstrap_admin_user(session)
-        superadmin = session.scalar(
-            select(AdminUser).where(AdminUser.is_superadmin.is_(True)).order_by(AdminUser.id.asc())
-        )
-    if superadmin:
-        run_startup_migrations(superadmin.id)
-
-    Base.metadata.create_all(bind=engine)
+    # 数据库结构由 Alembic 管理；部署和更新脚本会先执行 alembic upgrade head。
     with session_scope() as session:
         bootstrap_system_settings(session)
         bootstrap_admin_user(session)
@@ -98,6 +90,7 @@ async def lifespan(_: FastAPI):
                 migrate_legacy_user_settings_to_menus(session, admin_user.id)
         ensure_state(session)
 
+    await notification_service.start()
     await monitor.start()
     await cleanup_service.start()
     try:
@@ -105,6 +98,7 @@ async def lifespan(_: FastAPI):
     finally:
         await cleanup_service.stop()
         await monitor.stop()
+        await notification_service.stop()
 
 
 app = FastAPI(title="TAO Monitor", lifespan=lifespan)
@@ -184,7 +178,7 @@ def import_staging_dir() -> Path:
 
 
 def build_menu_data_export(menu: MonitorMenu, wallets: list[WalletWatch], username: str) -> bytes:
-    # 导出当前监控菜单的钱包地址、备注和 TG 机器人信息，便于后续导入恢复。
+    # 导出当前监控菜单的钱包地址、备注和开关状态，不导出 TG Token 等敏感资料。
     payload = {
         "format_version": IMPORT_EXPORT_FORMAT_VERSION,
         "exported_at": to_beijing_iso(datetime.utcnow()),
@@ -192,8 +186,6 @@ def build_menu_data_export(menu: MonitorMenu, wallets: list[WalletWatch], userna
         "menu": {
             "name": menu.name,
             "menu_kind": menu.menu_kind,
-            "telegram_bot_token": menu.telegram_bot_token,
-            "telegram_chat_id": menu.telegram_chat_id,
         },
         "wallets": [
             {
@@ -666,8 +658,6 @@ def parse_menu_data_import(file_bytes: bytes) -> dict[str, object]:
     return {
         "menu_name": str(menu.get("name", "")).strip(),
         "menu_kind": str(menu.get("menu_kind", BUILTIN_WALLET_KIND)).strip() or BUILTIN_WALLET_KIND,
-        "telegram_bot_token": str(menu.get("telegram_bot_token", "")).strip(),
-        "telegram_chat_id": str(menu.get("telegram_chat_id", "")).strip(),
         "wallets": normalized_wallets,
     }
 
@@ -752,9 +742,8 @@ def apply_import_preview(
     payload: dict[str, object],
     resolutions: dict[str, str] | None = None,
 ) -> dict[str, int]:
-    # 把预览结果真正写入数据库：新增钱包、按选择解决备注冲突、同步 TG 信息。
+    # 把预览结果真正写入数据库：新增钱包、按选择解决备注冲突；TG 信息不参与导入。
     preview = payload.get("preview", {})
-    imported = payload.get("imported", {})
     additions = preview.get("additions", []) if isinstance(preview, dict) else []
     conflicts = preview.get("conflicts", []) if isinstance(preview, dict) else []
 
@@ -795,9 +784,6 @@ def apply_import_preview(
         wallet.alias = str(conflict["imported_alias"])
         updated_aliases += 1
 
-    if isinstance(imported, dict):
-        menu.telegram_bot_token = str(imported.get("telegram_bot_token", ""))
-        menu.telegram_chat_id = str(imported.get("telegram_chat_id", ""))
     session.flush()
     return {"created": created, "updated_aliases": updated_aliases}
 
@@ -1083,11 +1069,14 @@ async def delete_monitor_menu(request: Request, menu_id: int) -> RedirectRespons
 
         wallet_rows = session.scalars(select(WalletWatch).where(WalletWatch.monitor_menu_id == menu_id)).all()
         event_rows = session.scalars(select(ChainEvent).where(ChainEvent.monitor_menu_id == menu_id)).all()
+        outbox_rows = session.scalars(select(NotificationOutbox).where(NotificationOutbox.monitor_menu_id == menu_id)).all()
         menu_name = menu.name
 
         for row in wallet_rows:
             session.delete(row)
         for row in event_rows:
+            session.delete(row)
+        for row in outbox_rows:
             session.delete(row)
         session.delete(menu)
 
@@ -1303,6 +1292,7 @@ async def delete_admin_user(request: Request, user_id: int, next_panel: str = Fo
         menu_rows = session.scalars(select(MonitorMenu).where(MonitorMenu.owner_user_id == user.id)).all()
         wallet_rows = session.scalars(select(WalletWatch).where(WalletWatch.owner_user_id == user.id)).all()
         event_rows = session.scalars(select(ChainEvent).where(ChainEvent.owner_user_id == user.id)).all()
+        outbox_rows = session.scalars(select(NotificationOutbox).where(NotificationOutbox.owner_user_id == user.id)).all()
         settings_row = session.get(UserSetting, user.id)
 
         for row in menu_rows:
@@ -1310,6 +1300,8 @@ async def delete_admin_user(request: Request, user_id: int, next_panel: str = Fo
         for row in wallet_rows:
             session.delete(row)
         for row in event_rows:
+            session.delete(row)
+        for row in outbox_rows:
             session.delete(row)
         if settings_row:
             session.delete(settings_row)
@@ -1323,7 +1315,7 @@ async def delete_admin_user(request: Request, user_id: int, next_panel: str = Fo
 
 @app.get("/monitor-menus/{menu_id}/data-transfer/export")
 async def export_wallet_backup(request: Request, menu_id: int):
-    # 资料导出只导出当前菜单自己的钱包地址、备注和 TG 机器人信息。
+    # 资料导出只导出当前菜单自己的钱包地址、备注和开关状态。
     if not is_authenticated(request):
         return login_redirect()
 

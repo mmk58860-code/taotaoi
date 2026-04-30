@@ -108,3 +108,28 @@ class AdminUser(Base):
     password_ciphertext: Mapped[str] = mapped_column(Text, default="")
     is_superadmin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+# Telegram 通知队列表：链上扫描只负责写入队列，独立后台任务负责发送和重试。
+class NotificationOutbox(Base):
+    __tablename__ = "notification_outbox"
+    __table_args__ = (
+        Index("ix_notification_outbox_status_next_retry", "status", "next_retry_at"),
+        Index("ix_notification_outbox_chain_event_id", "chain_event_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    monitor_menu_id: Mapped[int] = mapped_column(Integer, index=True)
+    chain_event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    telegram_bot_token: Mapped[str] = mapped_column(String(256))
+    telegram_chat_id: Mapped[str] = mapped_column(String(128))
+    message: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=10)
+    next_retry_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

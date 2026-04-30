@@ -11,3 +11,4 @@ cryptography==45.0.6
 itsdangerous==2.2.0
 python-multipart==0.0.20
 psycopg2-binary>=2.9,<3
+alembic>=1.13,<2

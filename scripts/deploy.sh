@@ -10,6 +10,9 @@ PORT="${PORT:-8080}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-change-this-password}"
 SECRET_KEY="${SECRET_KEY:-change-me}"
+DB_NAME="${DB_NAME:-tao_monitor}"
+DB_USER="${DB_USER:-taomonitor}"
+DB_PASSWORD="${DB_PASSWORD:-}"
 
 run_privileged() {
   # 如果服务器有 sudo 就用 sudo，否则直接执行，兼容 root 机器。
@@ -21,7 +24,7 @@ run_privileged() {
 }
 
 run_as_app_user() {
-  # 尽量以应用用户运行 pip 和 git，避免生成 root 权限文件。
+  # 尽量以应用用户运行 pip、git 和迁移命令，避免生成 root 权限文件。
   if [[ "$(id -un)" == "$APP_USER" ]]; then
     "$@"
   elif command -v sudo >/dev/null 2>&1; then
@@ -35,6 +38,22 @@ run_as_app_user() {
     exit 1
   fi
 }
+
+run_as_postgres() {
+  # PostgreSQL 初始化需要 postgres 系统用户权限。
+  if command -v sudo >/dev/null 2>&1; then
+    sudo -u postgres "$@"
+  elif command -v runuser >/dev/null 2>&1; then
+    runuser -u postgres -- "$@"
+  else
+    su -s /bin/bash postgres -c "$(printf '%q ' "$@")"
+  fi
+}
+
+if command -v apt-get >/dev/null 2>&1; then
+  run_privileged apt-get update
+  run_privileged apt-get install -y python3 python3-venv python3-pip git rsync zip postgresql postgresql-client
+fi
 
 # 确保服务运行用户、目录和数据目录都准备齐全。
 run_privileged getent group "$APP_GROUP" >/dev/null 2>&1 || run_privileged groupadd --system "$APP_GROUP"
@@ -55,8 +74,31 @@ if [[ ! -f .env ]]; then
   run_as_app_user cp .env.example .env
 fi
 
+CURRENT_DB_PASSWORD="$(
+  python3 - "$APP_DIR/.env" <<'PY'
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+import sys
+
+env_path = Path(sys.argv[1])
+values = {}
+if env_path.exists():
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        if "=" not in line or line.lstrip().startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        values[key] = value
+raw_url = values.get("DATABASE_URL", "").replace("postgresql+psycopg2://", "postgresql://")
+parsed = urlparse(raw_url)
+print(unquote(parsed.password or ""))
+PY
+)"
+if [[ -z "$DB_PASSWORD" && -n "$CURRENT_DB_PASSWORD" && "$CURRENT_DB_PASSWORD" != "change-this-password" ]]; then
+  DB_PASSWORD="$CURRENT_DB_PASSWORD"
+fi
+
 if [[ -t 0 ]]; then
-  # 交互模式下，允许用户现场设置端口和总管理员信息。
+  # 交互模式下，允许用户现场设置端口、总管理员信息和数据库密码。
   read -r -p "网页端口 [${PORT}]: " input_port || true
   if [[ -n "${input_port:-}" ]]; then
     PORT="$input_port"
@@ -73,6 +115,12 @@ if [[ -t 0 ]]; then
     ADMIN_PASSWORD="$input_admin_password"
   fi
 
+  read -r -s -p "PostgreSQL 数据库密码 [留空自动生成]: " input_db_password || true
+  echo
+  if [[ -n "${input_db_password:-}" ]]; then
+    DB_PASSWORD="$input_db_password"
+  fi
+
   read -r -p "会话密钥 SECRET_KEY [留空则自动生成]: " input_secret_key || true
   if [[ -n "${input_secret_key:-}" ]]; then
     SECRET_KEY="$input_secret_key"
@@ -85,17 +133,50 @@ PY
   fi
 fi
 
+if [[ -z "$DB_PASSWORD" || "$DB_PASSWORD" == "change-this-password" ]]; then
+  DB_PASSWORD="$(python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(32))
+PY
+)"
+fi
+
+run_privileged systemctl enable --now postgresql || true
+
+if id postgres >/dev/null 2>&1; then
+  escaped_db_password="${DB_PASSWORD//\'/\'\'}"
+  run_as_postgres psql <<SQL
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${DB_USER}') THEN
+    CREATE ROLE ${DB_USER} LOGIN PASSWORD '${escaped_db_password}';
+  ELSE
+    ALTER ROLE ${DB_USER} WITH PASSWORD '${escaped_db_password}';
+  END IF;
+END
+\$\$;
+SQL
+
+  if ! run_as_postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1; then
+    run_as_postgres createdb -O "$DB_USER" "$DB_NAME"
+  fi
+fi
+
 # 把交互输入安全写回 .env，避免密码里带特殊字符时把配置文件写坏。
-run_as_app_user python3 - "$APP_DIR/.env" "$PORT" "$ADMIN_USERNAME" "$ADMIN_PASSWORD" "$SECRET_KEY" <<'PY'
+run_as_app_user python3 - "$APP_DIR/.env" "$PORT" "$ADMIN_USERNAME" "$ADMIN_PASSWORD" "$SECRET_KEY" "$DB_USER" "$DB_PASSWORD" "$DB_NAME" <<'PY'
 from pathlib import Path
+from urllib.parse import quote
 import sys
 
 env_path = Path(sys.argv[1])
+port, admin_username, admin_password, secret_key, db_user, db_password, db_name = sys.argv[2:9]
+database_url = f"postgresql+psycopg2://{db_user}:{quote(db_password)}@127.0.0.1:5432/{db_name}"
 updates = {
-    "APP_PORT": sys.argv[2],
-    "ADMIN_USERNAME": sys.argv[3],
-    "ADMIN_PASSWORD": sys.argv[4],
-    "SECRET_KEY": sys.argv[5],
+    "APP_PORT": port,
+    "ADMIN_USERNAME": admin_username,
+    "ADMIN_PASSWORD": admin_password,
+    "SECRET_KEY": secret_key,
+    "DATABASE_URL": database_url,
 }
 
 lines = env_path.read_text(encoding="utf-8").splitlines()
@@ -119,6 +200,8 @@ for key, value in updates.items():
 
 env_path.write_text("\n".join(result) + "\n", encoding="utf-8")
 PY
+
+run_as_app_user .venv/bin/alembic upgrade head
 
 # 根据当前项目实际路径生成 systemd 服务文件。
 run_privileged bash -lc "$(cat <<EOF
