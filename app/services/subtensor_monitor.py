@@ -222,7 +222,6 @@ class SubtensorMonitor:
                     ChainEvent.detected_at <= cutoff,
                     ~ChainEvent.raw_payload.contains('"tao_completion_status": "completed"'),
                     ~ChainEvent.raw_payload.contains('"tao_estimate_status": "estimated"'),
-                    ~ChainEvent.raw_payload.contains('"tao_estimate_status": "not_available"'),
                 )
                 .order_by(ChainEvent.detected_at.desc())
                 .limit(limit)
@@ -285,12 +284,31 @@ class SubtensorMonitor:
         if not isinstance(payload, dict):
             return None
         params = payload.get("leaf_call", payload)
+        block_hash = substrate.get_block_hash(row.block_number)
+        return self._estimate_subnet_price_from_params(
+            substrate=substrate,
+            action_type=row.action_type,
+            params=params,
+            block_number=row.block_number,
+            block_hash=block_hash,
+        )
+
+    def _estimate_subnet_price_from_params(
+        self,
+        substrate: SubstrateInterface,
+        action_type: str,
+        params: Any,
+        block_number: int,
+        block_hash: str | None,
+    ) -> TaoPriceEstimate | None:
+        # 实时扫块和后台补全共用这段逻辑：只把 Alpha 卖出按子网价格折算成 TAO 估算。
+        if action_type != "stake_remove":
+            return None
         alpha_candidates = self._collect_alpha_amount_candidates(params)
         subnet_ids = self._extract_subnet_ids(params)
         if not alpha_candidates or not subnet_ids:
             return None
 
-        block_hash = substrate.get_block_hash(row.block_number)
         alpha_amount = max(alpha_candidates) / RAO_PER_TAO
         for netuid in subnet_ids:
             price = self._query_subnet_price_tao_per_alpha(substrate, netuid, block_hash)
@@ -305,6 +323,12 @@ class SubtensorMonitor:
                     netuid=netuid,
                     source="subnet_price",
                 )
+        logger.info(
+            "未拿到子网价格估算 block=%s netuids=%s alpha=%s",
+            block_number,
+            subnet_ids,
+            round(alpha_amount, 9),
+        )
         return None
 
     def _query_subnet_price_tao_per_alpha(
@@ -320,23 +344,35 @@ class SubtensorMonitor:
             ("SubtensorModule", "AlphaSqrtPrice"),
         )
         for module, storage_function in storage_candidates:
-            try:
-                raw_price = substrate.query(
-                    module=module,
-                    storage_function=storage_function,
-                    params=[netuid],
-                    block_hash=block_hash,
-                )
-            except Exception:
-                continue
-            sqrt_price = self._fixed_to_float(raw_price)
-            price = sqrt_price * sqrt_price
-            if math.isfinite(price) and price > 0:
-                return price
+            for candidate_hash in (block_hash, None):
+                try:
+                    raw_price = substrate.query(
+                        module=module,
+                        storage_function=storage_function,
+                        params=[netuid],
+                        block_hash=candidate_hash,
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "查询子网价格失败 module=%s storage=%s netuid=%s block_hash=%s error=%s",
+                        module,
+                        storage_function,
+                        netuid,
+                        bool(candidate_hash),
+                        exc,
+                    )
+                    continue
+                sqrt_price = self._fixed_to_float(raw_price)
+                price = sqrt_price * sqrt_price
+                if math.isfinite(price) and price > 0:
+                    return price
         return 0.0
 
     def _fixed_to_float(self, value: Any, *, frac_bits: int = 64, total_bits: int = 128) -> float:
         # Bittensor SDK 的子网价格来自定点 sqrt_price；这里复刻轻量换算，避免引入完整 SDK。
+        normalized = self._normalize_value(value)
+        if isinstance(normalized, float) and math.isfinite(normalized):
+            return normalized
         raw = self._to_int(value)
         if raw is None:
             return 0.0
@@ -633,6 +669,15 @@ class SubtensorMonitor:
                     continue
                 if not success and self._is_trade_action(action_type):
                     continue
+                price_estimate = None
+                if amount_tao <= 0:
+                    price_estimate = self._estimate_subnet_price_from_params(
+                        substrate=substrate,
+                        action_type=action_type,
+                        params=leaf_call.params,
+                        block_number=block_number,
+                        block_hash=block_hash,
+                    )
                 matched_menus = set(threshold_menu_ids)
                 for address in involved_addresses:
                     matched_menus.update(watch_map.get(address, {}).keys())
@@ -687,6 +732,7 @@ class SubtensorMonitor:
                         threshold_tao=profile.threshold_tao,
                         success=success,
                         failure_reason=failure_reason,
+                        price_estimate=price_estimate,
                     )
                     raw_payload = {
                         "extrinsic": extrinsic_payload["raw_payload"],
@@ -696,6 +742,17 @@ class SubtensorMonitor:
                         "action_type": action_type,
                         "involved_addresses": involved_addresses,
                     }
+                    if price_estimate is not None:
+                        raw_payload["tao_estimate_status"] = "estimated"
+                        raw_payload["tao_estimate"] = {
+                            "source": price_estimate.source,
+                            "amount_tao": price_estimate.amount_tao,
+                            "price_tao_per_alpha": price_estimate.price_tao_per_alpha,
+                            "alpha_amount": price_estimate.alpha_amount,
+                            "netuid": price_estimate.netuid,
+                            "block_number": block_number,
+                            "calculated_at": datetime.utcnow().isoformat(),
+                        }
                     should_notify = self._should_notify_action(
                         profile=profile,
                         action_type=action_type,
@@ -1392,6 +1449,7 @@ class SubtensorMonitor:
         threshold_tao: float,
         success: bool,
         failure_reason: str | None,
+        price_estimate: TaoPriceEstimate | None = None,
     ) -> str:
         # 消息内容直接面向 TG 和网页弹窗，所以把调用、状态、关联地址和命中原因都写清楚。
         action_type = self._classify_action_type(leaf_call.pallet, leaf_call.call_name)
@@ -1402,11 +1460,14 @@ class SubtensorMonitor:
         )
         amount_label = f"{amount_tao:.6f} TAO"
         if amount_tao <= 0 and action_type in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
-            estimated_tao = self._estimate_limit_price_tao(leaf_call.params)
-            if estimated_tao > 0:
-                amount_label = f"约 {estimated_tao:.6f} TAO（按限价估算）"
+            if price_estimate is not None:
+                amount_label = f"约 {price_estimate.amount_tao:.6f} TAO（按子网价格估算）"
             else:
-                amount_label = "未确认 TAO 成交额（链上参数多为 Alpha 数量）"
+                estimated_tao = self._estimate_limit_price_tao(leaf_call.params)
+                if estimated_tao > 0:
+                    amount_label = f"约 {estimated_tao:.6f} TAO（按限价估算）"
+                else:
+                    amount_label = "未确认 TAO 成交额（链上参数多为 Alpha 数量）"
         tags: list[str] = []
         if watched:
             tags.append(f"监控钱包: {', '.join(matched_aliases)}")
@@ -1891,6 +1952,8 @@ class SubtensorMonitor:
             return None
         if isinstance(normalized, int):
             return normalized
+        if isinstance(normalized, float) and math.isfinite(normalized):
+            return int(normalized)
         if isinstance(normalized, dict):
             for key in ("value", "amount", "balance", "tao", "rao", "bits", "compact"):
                 if key in normalized:
