@@ -133,6 +133,8 @@ sudo systemctl enable tao-monitor.service
 - `data/`、`logs/`、`backups/` 默认都不纳入 Git 管理，所以更新不会覆盖资料
 - 如果你的实际部署目录不是 `/opt/tao-monitor`，下面更新命令里的路径也要一起替换
 
+如果旧服务器仍在使用 SQLite，请先确认备份正常，再用 `scripts/migrate_sqlite_to_postgres.py` 把旧数据迁移到 PostgreSQL，最后再切换 `.env` 里的 `DATABASE_URL`。
+
 更新命令：
 
 ```bash
