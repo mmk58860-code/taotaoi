@@ -39,5 +39,32 @@ run_as_app_user git fetch --all
 run_as_app_user git pull --ff-only
 run_as_app_user .venv/bin/pip install -r requirements.txt
 run_as_app_user .venv/bin/alembic upgrade head
+run_as_app_user python3 - "$APP_DIR/.env" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+updates = {
+    "CLEANUP_RETENTION_HOURS": "1",
+    "CLEANUP_INTERVAL_MINUTES": "10",
+}
+lines = env_path.read_text(encoding="utf-8").splitlines()
+seen = set()
+out = []
+for line in lines:
+    if "=" not in line or line.lstrip().startswith("#"):
+        out.append(line)
+        continue
+    key, _, _ = line.partition("=")
+    if key in updates:
+        out.append(f"{key}={updates[key]}")
+        seen.add(key)
+    else:
+        out.append(line)
+for key, value in updates.items():
+    if key not in seen:
+        out.append(f"{key}={value}")
+env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+PY
 run_privileged systemctl restart tao-monitor.service
 run_privileged systemctl status tao-monitor.service --no-pager

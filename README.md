@@ -93,10 +93,12 @@ LARGE_TRANSFER_THRESHOLD_TAO=5
 ADMIN_USERNAME=你的网页登录总管理员账号
 ADMIN_PASSWORD=你的网页登录总管理员密码
 CLEANUP_TIME=04:00
-CLEANUP_RETENTION_DAYS=3
+CLEANUP_RETENTION_DAYS=1
+CLEANUP_RETENTION_HOURS=1
+CLEANUP_INTERVAL_MINUTES=10
 ```
 
-历史命中自动清理默认开启，按北京时间每天 `04:00` 删除 3 天前的 `chain_events` 命中记录；只清理历史命中，不会删除钱包、菜单、账号、TG 或系统设置。
+历史命中自动清理默认开启，每 10 分钟删除 1 小时前的 `chain_events` 命中记录；只清理历史命中，不会删除钱包、菜单、账号、TG 或系统设置。页面默认展示 50 条，并尽量覆盖最近 1 小时内的数据。
 
 5. 改完配置后重启服务：
 

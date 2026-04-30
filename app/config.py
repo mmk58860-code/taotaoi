@@ -34,7 +34,9 @@ class Settings(BaseSettings):
     admin_password: str = Field(default="change-this-password", alias="ADMIN_PASSWORD")
     cleanup_enabled: bool = Field(default=True, alias="CLEANUP_ENABLED")
     cleanup_time: str = Field(default="04:00", alias="CLEANUP_TIME")
-    cleanup_retention_days: int = Field(default=3, alias="CLEANUP_RETENTION_DAYS")
+    cleanup_retention_days: int = Field(default=1, alias="CLEANUP_RETENTION_DAYS")
+    cleanup_retention_hours: int = Field(default=1, alias="CLEANUP_RETENTION_HOURS")
+    cleanup_interval_minutes: int = Field(default=10, alias="CLEANUP_INTERVAL_MINUTES")
 
     @property
     def sqlite_path(self) -> Path | None:

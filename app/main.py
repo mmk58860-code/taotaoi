@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
@@ -72,6 +72,8 @@ app_settings = get_settings()
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
 IMPORT_EXPORT_FORMAT_VERSION = 1
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+EVENT_DISPLAY_LIMIT = 50
+EVENT_MIN_VISIBLE_HOURS = 1
 
 
 @asynccontextmanager
@@ -899,6 +901,28 @@ def event_query_for_user(user_id: int):
     return select(ChainEvent).where(ChainEvent.owner_user_id == user_id)
 
 
+def latest_visible_events(session, user_id: int) -> list[ChainEvent]:
+    # 页面默认展示 50 条，同时尽量覆盖最近 1 小时内的数据。
+    cutoff = datetime.utcnow() - timedelta(hours=EVENT_MIN_VISIBLE_HOURS)
+    recent_rows = session.scalars(
+        event_query_for_user(user_id)
+        .where(ChainEvent.detected_at >= cutoff)
+        .order_by(ChainEvent.detected_at.desc())
+    ).all()
+    if len(recent_rows) >= EVENT_DISPLAY_LIMIT:
+        return recent_rows
+
+    rows_by_id = {row.id: row for row in recent_rows}
+    filler_rows = session.scalars(
+        event_query_for_user(user_id)
+        .order_by(ChainEvent.detected_at.desc())
+        .limit(EVENT_DISPLAY_LIMIT)
+    ).all()
+    for row in filler_rows:
+        rows_by_id.setdefault(row.id, row)
+    return sorted(rows_by_id.values(), key=lambda row: row.detected_at, reverse=True)
+
+
 def get_owned_menu(session, request: Request, menu_id: int) -> MonitorMenu | None:
     # 所有菜单操作都必须校验归属，普通账号绝不能操作别人菜单。
     row = session.get(MonitorMenu, menu_id)
@@ -997,9 +1021,7 @@ async def dashboard(request: Request):
             ).all()
             for menu in wallet_menus
         }
-        events = session.scalars(
-            event_query_for_user(user_id).order_by(ChainEvent.detected_at.desc()).limit(50)
-        ).all()
+        events = latest_visible_events(session, user_id)
         admin_users = session.scalars(select(AdminUser).order_by(AdminUser.created_at.asc())).all() if is_superadmin(request) else []
         state = ensure_state(session)
         system_settings = get_system_runtime_settings(session) if is_superadmin(request) else {}
@@ -1085,9 +1107,7 @@ async def api_state(request: Request) -> JSONResponse:
         events = session.scalar(
             select(func.count()).select_from(ChainEvent).where(ChainEvent.owner_user_id == user_id)
         ) or 0
-        latest = session.scalars(
-            event_query_for_user(user_id).order_by(desc(ChainEvent.detected_at)).limit(10)
-        ).all()
+        latest = latest_visible_events(session, user_id)
         alert_menu = get_builtin_menu(session, user_id, BUILTIN_ALERT_KIND)
         alert_settings = get_menu_runtime_settings(session, user_id, alert_menu.id) if alert_menu else {}
 
