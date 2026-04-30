@@ -283,7 +283,11 @@ def event_trade_signal(event: ChainEvent) -> dict[str, object]:
         "stake_swap",
         "swap_call",
     }:
-        amount_label = "未确认 TAO 成交额"
+        alpha_amount = fallback_alpha_amount(event)
+        if alpha_amount > 0:
+            amount_label = f"{alpha_amount:.6f} Alpha（TAO待确认）"
+        else:
+            amount_label = "未确认 TAO 成交额"
 
     return {
         "subnet": subnet_label,
@@ -328,6 +332,23 @@ def normalized_trade_amount_tao(event: ChainEvent) -> float:
                 candidates.extend(collect_tao_amount_candidates(related_event))
     else:
         candidates.extend(collect_tao_amount_candidates(params))
+    if not candidates:
+        return 0.0
+    return round(max(candidates) / 1_000_000_000, 9)
+
+
+def fallback_alpha_amount(event: ChainEvent) -> float:
+    # 动态 TAO 的减仓/换仓调用参数常常是 Alpha 数量；TAO 结算额缺失时至少展示 Alpha 规模。
+    if event.action_type not in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
+        return 0.0
+    try:
+        raw = json.loads(event.raw_payload or "{}")
+    except Exception:
+        return 0.0
+    if not isinstance(raw, dict):
+        return 0.0
+    params = raw.get("leaf_call", raw)
+    candidates = collect_alpha_amount_candidates(params)
     if not candidates:
         return 0.0
     return round(max(candidates) / 1_000_000_000, 9)
@@ -589,6 +610,37 @@ def collect_amount_candidates(
                     include_stake_amount=include_stake_amount,
                 )
             )
+    return results
+
+
+def collect_alpha_amount_candidates(payload) -> list[int]:
+    # 只用于兜底展示，避免把 Alpha 误写成 TAO 成交额。
+    results: list[int] = []
+    ignored_tokens = ("price", "netuid", "subnet", "uid", "block", "hotkey", "coldkey", "delegate", "address")
+    amount_tokens = ("alpha", "stake", "amount", "value")
+
+    def is_alpha_amount_key(key_text: str) -> bool:
+        key_text = key_text.lower()
+        if any(token in key_text for token in ignored_tokens):
+            return False
+        return any(token in key_text for token in amount_tokens)
+
+    if isinstance(payload, dict):
+        param_name = str(payload.get("name", payload.get("param", ""))).lower()
+        if is_alpha_amount_key(param_name):
+            parsed = to_int(payload.get("value"))
+            if parsed is not None and parsed > 0:
+                results.append(parsed)
+        for key, value in payload.items():
+            key_text = str(key).lower()
+            if key_text != "value" and is_alpha_amount_key(key_text):
+                parsed = to_int(value)
+                if parsed is not None and parsed > 0:
+                    results.append(parsed)
+            results.extend(collect_alpha_amount_candidates(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            results.extend(collect_alpha_amount_candidates(item))
     return results
 
 
