@@ -179,6 +179,7 @@ updates = {
     "DATABASE_URL": database_url,
     "TAOSTATS_ENABLED": "false",
     "TAOSTATS_API_KEY": "",
+    "TAOSTATS_AMOUNT_MODE": "fallback",
 }
 
 lines = env_path.read_text(encoding="utf-8").splitlines()

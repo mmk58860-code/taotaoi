@@ -219,19 +219,23 @@ class SubtensorMonitor:
                 pass
 
     def _complete_unresolved_stake_amounts_sync(self, limit: int = 6) -> int:
+        settings = get_settings()
+        taostats_mode = self._taostats_amount_mode(settings.taostats_amount_mode)
         with session_scope() as session:
             raw_settings = get_system_runtime_settings(session)
             typed = typed_system_runtime_settings(raw_settings)
             cutoff = datetime.utcnow() - timedelta(seconds=15)
+            conditions = [
+                ChainEvent.action_type.in_(("stake_remove", "stake_swap", "swap_call")),
+                ChainEvent.amount_tao <= 0,
+                ChainEvent.detected_at <= cutoff,
+                ~ChainEvent.raw_payload.contains('"tao_completion_status": "completed"'),
+            ]
+            if taostats_mode != "only":
+                conditions.append(~ChainEvent.raw_payload.contains('"tao_estimate_status": "estimated"'))
             rows = session.scalars(
                 select(ChainEvent)
-                .where(
-                    ChainEvent.action_type.in_(("stake_remove", "stake_swap", "swap_call")),
-                    ChainEvent.amount_tao <= 0,
-                    ChainEvent.detected_at <= cutoff,
-                    ~ChainEvent.raw_payload.contains('"tao_completion_status": "completed"'),
-                    ~ChainEvent.raw_payload.contains('"tao_estimate_status": "estimated"'),
-                )
+                .where(*conditions)
                 .order_by(ChainEvent.detected_at.desc())
                 .limit(limit)
             ).all()
@@ -243,15 +247,31 @@ class SubtensorMonitor:
         completed_count = 0
         try:
             for row in rows:
-                related_events = self._fetch_related_events_for_chain_event(substrate, row)
-                amount_tao = self._estimate_amount_tao_from_events(row.action_type, related_events)
+                related_events: list[EventEnvelope] = []
+                amount_tao = 0.0
                 taostats_estimate = None
                 price_estimate = None
-                if amount_tao <= 0:
+                if taostats_mode in {"primary", "only"}:
                     taostats_estimate = self._estimate_taostats_amount_tao(row)
-                if amount_tao <= 0 and taostats_estimate is None:
+
+                if taostats_estimate is None and taostats_mode != "only":
+                    related_events = self._fetch_related_events_for_chain_event(substrate, row)
+                    amount_tao = self._estimate_amount_tao_from_events(row.action_type, related_events)
+
+                if amount_tao <= 0 and taostats_estimate is None and taostats_mode == "fallback":
+                    taostats_estimate = self._estimate_taostats_amount_tao(row)
+
+                if amount_tao <= 0 and taostats_estimate is None and taostats_mode != "only":
                     price_estimate = self._estimate_subnet_price_tao(substrate, row)
-                self._store_completion_result(row.id, related_events, amount_tao, taostats_estimate, price_estimate)
+
+                self._store_completion_result(
+                    row.id,
+                    related_events,
+                    amount_tao,
+                    taostats_estimate,
+                    price_estimate,
+                    taostats_only=taostats_mode == "only",
+                )
                 if amount_tao > 0 or taostats_estimate is not None or price_estimate is not None:
                     completed_count += 1
         finally:
@@ -312,6 +332,12 @@ class SubtensorMonitor:
                     source_payload=item,
                 )
         return None
+
+    def _taostats_amount_mode(self, value: str) -> str:
+        mode = str(value or "fallback").strip().lower()
+        if mode in {"fallback", "primary", "only"}:
+            return mode
+        return "fallback"
 
     def _extract_taostats_tao_amount(self, payload: Any) -> float:
         # TaoStats 返回字段可能随接口版本变化，优先读取明确带 TAO/rao 语义且不含 alpha 的金额字段。
@@ -448,6 +474,7 @@ class SubtensorMonitor:
         amount_tao: float,
         taostats_estimate: TaoStatsEstimate | None = None,
         price_estimate: TaoPriceEstimate | None = None,
+        taostats_only: bool = False,
     ) -> None:
         with session_scope() as session:
             row = session.get(ChainEvent, event_id)
@@ -499,6 +526,8 @@ class SubtensorMonitor:
                 )
             else:
                 payload["tao_completion_status"] = "not_found"
+                if taostats_only:
+                    payload["taostats_status"] = "not_found"
                 payload["tao_estimate_status"] = "not_available"
             row.raw_payload = json.dumps(payload, ensure_ascii=False, default=str)
 
@@ -741,8 +770,12 @@ class SubtensorMonitor:
                     continue
                 if not success and self._is_trade_action(action_type):
                     continue
+                settings = get_settings()
+                taostats_mode = self._taostats_amount_mode(settings.taostats_amount_mode)
+                if taostats_mode == "only" and action_type == "stake_remove":
+                    amount_tao = 0.0
                 price_estimate = None
-                if amount_tao <= 0:
+                if amount_tao <= 0 and taostats_mode != "only":
                     price_estimate = self._estimate_subnet_price_from_params(
                         substrate=substrate,
                         action_type=action_type,
@@ -805,6 +838,7 @@ class SubtensorMonitor:
                         success=success,
                         failure_reason=failure_reason,
                         price_estimate=price_estimate,
+                        taostats_only=taostats_mode == "only",
                     )
                     raw_payload = {
                         "extrinsic": extrinsic_payload["raw_payload"],
@@ -1522,6 +1556,7 @@ class SubtensorMonitor:
         success: bool,
         failure_reason: str | None,
         price_estimate: TaoPriceEstimate | None = None,
+        taostats_only: bool = False,
     ) -> str:
         # 消息内容直接面向 TG 和网页弹窗，所以把调用、状态、关联地址和命中原因都写清楚。
         action_type = self._classify_action_type(leaf_call.pallet, leaf_call.call_name)
@@ -1532,7 +1567,9 @@ class SubtensorMonitor:
         )
         amount_label = f"{amount_tao:.6f} TAO"
         if amount_tao <= 0 and action_type in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
-            if price_estimate is not None:
+            if taostats_only:
+                amount_label = "未确认 TAO 成交额（等待 TaoStats）"
+            elif price_estimate is not None:
                 amount_label = f"约 {price_estimate.amount_tao:.6f} TAO（按子网价格估算）"
             else:
                 estimated_tao = self._estimate_limit_price_tao(leaf_call.params)

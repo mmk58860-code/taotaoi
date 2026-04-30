@@ -100,6 +100,7 @@ CLEANUP_RETENTION_HOURS=1
 CLEANUP_INTERVAL_MINUTES=10
 TAOSTATS_ENABLED=false
 TAOSTATS_API_KEY=
+TAOSTATS_AMOUNT_MODE=fallback
 ```
 
 如果你申请了 TaoStats API Key，可以改成：
@@ -107,7 +108,10 @@ TAOSTATS_API_KEY=
 ```env
 TAOSTATS_ENABLED=true
 TAOSTATS_API_KEY=你的 TaoStats API Key
+TAOSTATS_AMOUNT_MODE=only
 ```
+
+`TAOSTATS_AMOUNT_MODE=only` 表示减仓金额只看 TaoStats，适合测试免费额度和数据准确性；如果 TaoStats 未返回，页面会明确显示“等待 TaoStats”或“TaoStats未返回”，不会再混入子网价格或限价估算。
 
 历史命中自动清理默认开启，每 10 分钟删除 1 小时前的 `chain_events` 命中记录；只清理历史命中，不会删除钱包、菜单、账号、TG 或系统设置。页面默认展示 50 条，并尽量覆盖最近 1 小时内的数据。
 

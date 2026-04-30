@@ -49,8 +49,9 @@ updates = {
     "CLEANUP_INTERVAL_MINUTES": "10",
     "TAOSTATS_ENABLED": "false",
     "TAOSTATS_API_KEY": "",
+    "TAOSTATS_AMOUNT_MODE": "fallback",
 }
-preserve_existing = {"TAOSTATS_ENABLED", "TAOSTATS_API_KEY"}
+preserve_existing = {"TAOSTATS_ENABLED", "TAOSTATS_API_KEY", "TAOSTATS_AMOUNT_MODE"}
 lines = env_path.read_text(encoding="utf-8").splitlines()
 seen = set()
 out = []

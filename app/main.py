@@ -287,15 +287,18 @@ def event_trade_signal(event: ChainEvent) -> dict[str, object]:
         "stake_swap",
         "swap_call",
     }:
-        estimated_tao = fallback_subnet_price_tao(event)
-        if estimated_tao > 0:
-            amount_label = f"约 {estimated_tao:.6f} TAO（按子网价格估算）"
+        if taostats_amount_mode() == "only" and event.action_type == "stake_remove":
+            amount_label = "未确认 TAO 成交额（TaoStats未返回）" if raw_taostats_status(event) == "not_found" else "未确认 TAO 成交额（等待 TaoStats）"
         else:
-            estimated_tao = fallback_limit_price_tao(event)
+            estimated_tao = fallback_subnet_price_tao(event)
             if estimated_tao > 0:
-                amount_label = f"约 {estimated_tao:.6f} TAO（按限价估算）"
+                amount_label = f"约 {estimated_tao:.6f} TAO（按子网价格估算）"
             else:
-                amount_label = "未确认 TAO 成交额"
+                estimated_tao = fallback_limit_price_tao(event)
+                if estimated_tao > 0:
+                    amount_label = f"约 {estimated_tao:.6f} TAO（按限价估算）"
+                else:
+                    amount_label = "未确认 TAO 成交额"
 
     return {
         "subnet": subnet_label,
@@ -318,6 +321,8 @@ def normalized_trade_amount_tao(event: ChainEvent) -> float:
     related_events = raw.get("related_events", [])
     action_type = str(raw.get("action_type") or event.action_type or "")
     if action_type in {"weights_set", "weights_commit", "weights_reveal", "children_set", "identity_set"}:
+        return 0.0
+    if taostats_amount_mode() == "only" and action_type == "stake_remove" and str(raw.get("tao_completion_source") or "") != "taostats":
         return 0.0
 
     if action_type == "stake_add":
@@ -409,6 +414,23 @@ def raw_completion_source(event: ChainEvent) -> str:
     if not isinstance(raw, dict):
         return ""
     return str(raw.get("tao_completion_source") or "")
+
+
+def raw_taostats_status(event: ChainEvent) -> str:
+    try:
+        raw = json.loads(event.raw_payload or "{}")
+    except Exception:
+        return ""
+    if not isinstance(raw, dict):
+        return ""
+    return str(raw.get("taostats_status") or "")
+
+
+def taostats_amount_mode() -> str:
+    mode = str(get_settings().taostats_amount_mode or "fallback").strip().lower()
+    if mode in {"fallback", "primary", "only"}:
+        return mode
+    return "fallback"
 
 
 def subnet_label_for_action(action_type: str, subnet_ids: list[int]) -> str:
