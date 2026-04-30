@@ -6,7 +6,7 @@ import logging
 import re
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -134,6 +134,7 @@ class SubtensorMonitor:
     def __init__(self) -> None:
         # 监听任务会在 FastAPI 生命周期内启动和关闭。
         self._task: asyncio.Task[None] | None = None
+        self._completion_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._wakeup_event = asyncio.Event()
         self._scan_lock = asyncio.Lock()
@@ -143,10 +144,11 @@ class SubtensorMonitor:
 
     async def start(self) -> None:
         # 避免重复创建监听任务。
-        if self._task and not self._task.done():
-            return
         self._stop_event.clear()
-        self._task = asyncio.create_task(self._run(), name="subtensor-monitor")
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run(), name="subtensor-monitor")
+        if self._completion_task is None or self._completion_task.done():
+            self._completion_task = asyncio.create_task(self._run_amount_completion(), name="stake-amount-completion")
 
     async def stop(self) -> None:
         # 优雅停止后台扫描任务。
@@ -156,6 +158,10 @@ class SubtensorMonitor:
             self._task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._task
+        if self._completion_task:
+            self._completion_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._completion_task
         self._close_substrate()
 
     async def restart(self) -> None:
@@ -178,6 +184,111 @@ class SubtensorMonitor:
                     state.updated_at = datetime.utcnow()
                 await asyncio.sleep(10)
                 continue
+
+    async def _run_amount_completion(self) -> None:
+        # 减仓成交额补全器独立运行；查不到不影响主监听和 TG 推送。
+        while not self._stop_event.is_set():
+            try:
+                completed_count = await asyncio.to_thread(self._complete_unresolved_stake_amounts_sync)
+                wait_seconds = 8 if completed_count else 20
+            except Exception:
+                logger.exception("减仓成交额补全失败，稍后重试")
+                wait_seconds = 20
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=wait_seconds)
+            except asyncio.TimeoutError:
+                pass
+
+    def _complete_unresolved_stake_amounts_sync(self, limit: int = 6) -> int:
+        with session_scope() as session:
+            raw_settings = get_system_runtime_settings(session)
+            typed = typed_system_runtime_settings(raw_settings)
+            cutoff = datetime.utcnow() - timedelta(seconds=15)
+            rows = session.scalars(
+                select(ChainEvent)
+                .where(
+                    ChainEvent.action_type.in_(("stake_remove", "stake_swap", "swap_call")),
+                    ChainEvent.amount_tao <= 0,
+                    ChainEvent.detected_at <= cutoff,
+                    ~ChainEvent.raw_payload.contains('"tao_completion_status": "not_found"'),
+                    ~ChainEvent.raw_payload.contains('"tao_completion_status": "completed"'),
+                )
+                .order_by(ChainEvent.detected_at.desc())
+                .limit(limit)
+            ).all()
+
+        if not rows:
+            return 0
+
+        substrate = SubstrateInterface(url=str(typed["subtensor_ws_url"]))
+        completed_count = 0
+        try:
+            for row in rows:
+                related_events = self._fetch_related_events_for_chain_event(substrate, row)
+                amount_tao = self._estimate_amount_tao_from_events(row.action_type, related_events)
+                self._store_completion_result(row.id, related_events, amount_tao)
+                if amount_tao > 0:
+                    completed_count += 1
+        finally:
+            close = getattr(substrate, "close", None)
+            if callable(close):
+                with suppress(Exception):
+                    close()
+        return completed_count
+
+    def _fetch_related_events_for_chain_event(
+        self,
+        substrate: SubstrateInterface,
+        row: ChainEvent,
+    ) -> list[EventEnvelope]:
+        block_hash = substrate.get_block_hash(row.block_number)
+        events = substrate.get_events(block_hash=block_hash)
+        event_rows = [self._normalize_event(event, idx) for idx, event in enumerate(events)]
+        grouped = self._group_events_by_extrinsic(event_rows)
+        related = grouped.get(int(row.extrinsic_index or 0), [])
+        if related:
+            return related
+        # 某些节点返回的 phase 结构解析不到时，保守返回空，避免误吃同块其他 extrinsic 的余额事件。
+        return []
+
+    def _estimate_amount_tao_from_events(self, action_type: str, related_events: list[EventEnvelope]) -> float:
+        candidates: list[int] = []
+        candidates.extend(self._collect_settlement_tao_from_events(action_type, related_events))
+        candidates.extend(self._collect_balance_tao_from_events(action_type, related_events))
+        if not candidates:
+            return 0.0
+        return round(max(candidates) / RAO_PER_TAO, 9)
+
+    def _store_completion_result(
+        self,
+        event_id: int,
+        related_events: list[EventEnvelope],
+        amount_tao: float,
+    ) -> None:
+        with session_scope() as session:
+            row = session.get(ChainEvent, event_id)
+            if row is None or row.amount_tao > 0:
+                return
+            payload = self._safe_json_loads(row.raw_payload)
+            if not isinstance(payload, dict):
+                payload = {}
+            if related_events:
+                payload["related_events"] = [event.payload for event in related_events]
+            payload["tao_completion_checked_at"] = datetime.utcnow().isoformat()
+            if amount_tao > 0:
+                row.amount_tao = amount_tao
+                payload["tao_completion_status"] = "completed"
+                row.message = self._replace_unconfirmed_amount_label(row.message, amount_tao)
+                logger.info("已补全减仓成交额 event_id=%s amount_tao=%s", event_id, amount_tao)
+            else:
+                payload["tao_completion_status"] = "not_found"
+            row.raw_payload = json.dumps(payload, ensure_ascii=False, default=str)
+
+    def _replace_unconfirmed_amount_label(self, message: str, amount_tao: float) -> str:
+        amount_label = f"金额估值: <b>{amount_tao:.6f} TAO（补全）</b>"
+        if "金额估值: <b>" not in message:
+            return message
+        return re.sub(r"金额估值: <b>.*?</b>", amount_label, message, count=1)
 
     def _current_poll_interval(self) -> int:
         # 链路级扫描间隔属于系统配置，只需读取一次总管理员维护的设置。

@@ -333,7 +333,7 @@ def normalized_trade_amount_tao(event: ChainEvent) -> float:
     else:
         candidates.extend(collect_tao_amount_candidates(params))
     if not candidates:
-        return 0.0
+        return float(event.amount_tao or 0)
     return round(max(candidates) / 1_000_000_000, 9)
 
 
