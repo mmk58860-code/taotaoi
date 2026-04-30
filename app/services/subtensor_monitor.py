@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 from contextlib import suppress
 from dataclasses import dataclass
@@ -130,6 +131,15 @@ class ActionRecord:
     telegram_chat_id: str
 
 
+@dataclass
+class TaoPriceEstimate:
+    amount_tao: float
+    price_tao_per_alpha: float
+    alpha_amount: float
+    netuid: int
+    source: str
+
+
 class SubtensorMonitor:
     def __init__(self) -> None:
         # 监听任务会在 FastAPI 生命周期内启动和关闭。
@@ -210,8 +220,9 @@ class SubtensorMonitor:
                     ChainEvent.action_type.in_(("stake_remove", "stake_swap", "swap_call")),
                     ChainEvent.amount_tao <= 0,
                     ChainEvent.detected_at <= cutoff,
-                    ~ChainEvent.raw_payload.contains('"tao_completion_status": "not_found"'),
                     ~ChainEvent.raw_payload.contains('"tao_completion_status": "completed"'),
+                    ~ChainEvent.raw_payload.contains('"tao_estimate_status": "estimated"'),
+                    ~ChainEvent.raw_payload.contains('"tao_estimate_status": "not_available"'),
                 )
                 .order_by(ChainEvent.detected_at.desc())
                 .limit(limit)
@@ -226,8 +237,11 @@ class SubtensorMonitor:
             for row in rows:
                 related_events = self._fetch_related_events_for_chain_event(substrate, row)
                 amount_tao = self._estimate_amount_tao_from_events(row.action_type, related_events)
-                self._store_completion_result(row.id, related_events, amount_tao)
-                if amount_tao > 0:
+                price_estimate = None
+                if amount_tao <= 0:
+                    price_estimate = self._estimate_subnet_price_tao(substrate, row)
+                self._store_completion_result(row.id, related_events, amount_tao, price_estimate)
+                if amount_tao > 0 or price_estimate is not None:
                     completed_count += 1
         finally:
             close = getattr(substrate, "close", None)
@@ -259,11 +273,84 @@ class SubtensorMonitor:
             return 0.0
         return round(max(candidates) / RAO_PER_TAO, 9)
 
+    def _estimate_subnet_price_tao(
+        self,
+        substrate: SubstrateInterface,
+        row: ChainEvent,
+    ) -> TaoPriceEstimate | None:
+        # 只有减仓才是 Alpha 卖回 TAO；换仓是 Alpha 到 Alpha，不能直接当 TAO 估值。
+        if row.action_type != "stake_remove":
+            return None
+        payload = self._safe_json_loads(row.raw_payload)
+        if not isinstance(payload, dict):
+            return None
+        params = payload.get("leaf_call", payload)
+        alpha_candidates = self._collect_alpha_amount_candidates(params)
+        subnet_ids = self._extract_subnet_ids(params)
+        if not alpha_candidates or not subnet_ids:
+            return None
+
+        block_hash = substrate.get_block_hash(row.block_number)
+        alpha_amount = max(alpha_candidates) / RAO_PER_TAO
+        for netuid in subnet_ids:
+            price = self._query_subnet_price_tao_per_alpha(substrate, netuid, block_hash)
+            if price <= 0:
+                continue
+            amount_tao = round(alpha_amount * price, 9)
+            if amount_tao > 0:
+                return TaoPriceEstimate(
+                    amount_tao=amount_tao,
+                    price_tao_per_alpha=round(price, 12),
+                    alpha_amount=round(alpha_amount, 9),
+                    netuid=netuid,
+                    source="subnet_price",
+                )
+        return None
+
+    def _query_subnet_price_tao_per_alpha(
+        self,
+        substrate: SubstrateInterface,
+        netuid: int,
+        block_hash: str | None,
+    ) -> float:
+        if netuid == 0:
+            return 1.0
+        storage_candidates = (
+            ("Swap", "AlphaSqrtPrice"),
+            ("SubtensorModule", "AlphaSqrtPrice"),
+        )
+        for module, storage_function in storage_candidates:
+            try:
+                raw_price = substrate.query(
+                    module=module,
+                    storage_function=storage_function,
+                    params=[netuid],
+                    block_hash=block_hash,
+                )
+            except Exception:
+                continue
+            sqrt_price = self._fixed_to_float(raw_price)
+            price = sqrt_price * sqrt_price
+            if math.isfinite(price) and price > 0:
+                return price
+        return 0.0
+
+    def _fixed_to_float(self, value: Any, *, frac_bits: int = 64, total_bits: int = 128) -> float:
+        # Bittensor SDK 的子网价格来自定点 sqrt_price；这里复刻轻量换算，避免引入完整 SDK。
+        raw = self._to_int(value)
+        if raw is None:
+            return 0.0
+        sign_bit = 1 << (total_bits - 1)
+        if raw & sign_bit:
+            raw -= 1 << total_bits
+        return raw / float(1 << frac_bits)
+
     def _store_completion_result(
         self,
         event_id: int,
         related_events: list[EventEnvelope],
         amount_tao: float,
+        price_estimate: TaoPriceEstimate | None = None,
     ) -> None:
         with session_scope() as session:
             row = session.get(ChainEvent, event_id)
@@ -280,12 +367,38 @@ class SubtensorMonitor:
                 payload["tao_completion_status"] = "completed"
                 row.message = self._replace_unconfirmed_amount_label(row.message, amount_tao)
                 logger.info("已补全减仓成交额 event_id=%s amount_tao=%s", event_id, amount_tao)
+            elif price_estimate is not None:
+                payload["tao_completion_status"] = "not_found"
+                payload["tao_estimate_status"] = "estimated"
+                payload["tao_estimate"] = {
+                    "source": price_estimate.source,
+                    "amount_tao": price_estimate.amount_tao,
+                    "price_tao_per_alpha": price_estimate.price_tao_per_alpha,
+                    "alpha_amount": price_estimate.alpha_amount,
+                    "netuid": price_estimate.netuid,
+                    "block_number": row.block_number,
+                    "calculated_at": datetime.utcnow().isoformat(),
+                }
+                row.message = self._replace_amount_label_with_text(
+                    row.message,
+                    f"约 {price_estimate.amount_tao:.6f} TAO（按子网价格估算）",
+                )
+                logger.info(
+                    "已按子网价格估算减仓 TAO event_id=%s netuid=%s amount_tao=%s",
+                    event_id,
+                    price_estimate.netuid,
+                    price_estimate.amount_tao,
+                )
             else:
                 payload["tao_completion_status"] = "not_found"
+                payload["tao_estimate_status"] = "not_available"
             row.raw_payload = json.dumps(payload, ensure_ascii=False, default=str)
 
     def _replace_unconfirmed_amount_label(self, message: str, amount_tao: float) -> str:
-        amount_label = f"金额估值: <b>{amount_tao:.6f} TAO（补全）</b>"
+        return self._replace_amount_label_with_text(message, f"{amount_tao:.6f} TAO（补全）")
+
+    def _replace_amount_label_with_text(self, message: str, amount_label: str) -> str:
+        amount_label = f"金额估值: <b>{amount_label}</b>"
         if "金额估值: <b>" not in message:
             return message
         return re.sub(r"金额估值: <b>.*?</b>", amount_label, message, count=1)
@@ -1791,6 +1904,9 @@ class SubtensorMonitor:
             digits = normalized.replace(",", "").replace("_", "")
             if digits.isdigit():
                 return int(digits)
+            if digits.lower().startswith("0x"):
+                with suppress(ValueError):
+                    return int(digits, 16)
         return None
 
 

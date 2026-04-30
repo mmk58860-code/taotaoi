@@ -285,11 +285,15 @@ def event_trade_signal(event: ChainEvent) -> dict[str, object]:
         "stake_swap",
         "swap_call",
     }:
-        estimated_tao = fallback_limit_price_tao(event)
+        estimated_tao = fallback_subnet_price_tao(event)
         if estimated_tao > 0:
-            amount_label = f"约 {estimated_tao:.6f} TAO（按限价估算）"
+            amount_label = f"约 {estimated_tao:.6f} TAO（按子网价格估算）"
         else:
-            amount_label = "未确认 TAO 成交额"
+            estimated_tao = fallback_limit_price_tao(event)
+            if estimated_tao > 0:
+                amount_label = f"约 {estimated_tao:.6f} TAO（按限价估算）"
+            else:
+                amount_label = "未确认 TAO 成交额"
 
     return {
         "subnet": subnet_label,
@@ -372,6 +376,27 @@ def fallback_limit_price_tao(event: ChainEvent) -> float:
     if not alpha_candidates or not price_candidates:
         return 0.0
     return round((max(alpha_candidates) * max(price_candidates)) / 1_000_000_000 / 1_000_000_000, 9)
+
+
+def fallback_subnet_price_tao(event: ChainEvent) -> float:
+    # 补全器找不到真实成交事件时，会把子网价格估算结果写进 raw_payload，页面只负责展示。
+    if event.action_type != "stake_remove":
+        return 0.0
+    try:
+        raw = json.loads(event.raw_payload or "{}")
+    except Exception:
+        return 0.0
+    if not isinstance(raw, dict):
+        return 0.0
+    estimate = raw.get("tao_estimate")
+    if not isinstance(estimate, dict):
+        return 0.0
+    if estimate.get("source") != "subnet_price":
+        return 0.0
+    parsed = to_float(estimate.get("amount_tao"))
+    if parsed is None or parsed <= 0:
+        return 0.0
+    return round(parsed, 9)
 
 
 def subnet_label_for_action(action_type: str, subnet_ids: list[int]) -> str:
@@ -716,6 +741,19 @@ def to_int(value) -> int | None:
 
 
 # 把页面常用函数注册成模板全局函数，避免某个渲染入口漏传后导致后台 500。
+def to_float(value) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.replace(",", "").replace("_", ""))
+        except ValueError:
+            return None
+    return None
+
+
 templates.env.globals["event_trade_signal"] = event_trade_signal
 templates.env.globals["block_label"] = block_label
 
