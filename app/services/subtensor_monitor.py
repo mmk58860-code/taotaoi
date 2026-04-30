@@ -987,6 +987,34 @@ class SubtensorMonitor:
                 candidates.extend(self._collect_alpha_amount_candidates(item))
         return candidates
 
+    def _collect_limit_price_candidates(self, payload: Any) -> list[int]:
+        # TAO 限价通常以 TaoBalance 存在，只用于估算 TAO，不参与数据库阈值判断。
+        normalized = self._normalize_value(payload)
+        candidates: list[int] = []
+
+        def is_limit_price_key(key_text: str, type_text: str = "") -> bool:
+            key_text = key_text.lower()
+            type_text = type_text.lower()
+            return "limit_price" in key_text or ("price" in key_text and "taobalance" in type_text)
+
+        if isinstance(normalized, dict):
+            param_name = str(normalized.get("name", normalized.get("param", "")))
+            type_name = str(normalized.get("type", normalized.get("type_name", "")))
+            if is_limit_price_key(param_name, type_name):
+                parsed = self._to_int(normalized.get("value"))
+                if parsed is not None and parsed > 0:
+                    candidates.append(parsed)
+            for key, value in normalized.items():
+                if key != "value" and is_limit_price_key(str(key), type_name):
+                    parsed = self._to_int(value)
+                    if parsed is not None and parsed > 0:
+                        candidates.append(parsed)
+                candidates.extend(self._collect_limit_price_candidates(value))
+        elif isinstance(normalized, list):
+            for item in normalized:
+                candidates.extend(self._collect_limit_price_candidates(item))
+        return candidates
+
     def _classify_action_type(self, pallet: str, call_name: str) -> str:
         # 把当前 runtime 的常见 TAO 生态调用归到统一业务动作名称上。
         pallet_lower = pallet.lower()
@@ -1150,9 +1178,9 @@ class SubtensorMonitor:
         )
         amount_label = f"{amount_tao:.6f} TAO"
         if amount_tao <= 0 and action_type in {"stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
-            alpha_amount = self._estimate_alpha_amount(leaf_call.params)
-            if alpha_amount > 0:
-                amount_label = f"{alpha_amount:.6f} Alpha（TAO待确认）"
+            estimated_tao = self._estimate_limit_price_tao(leaf_call.params)
+            if estimated_tao > 0:
+                amount_label = f"约 {estimated_tao:.6f} TAO（按限价估算）"
             else:
                 amount_label = "未确认 TAO 成交额（链上参数多为 Alpha 数量）"
         tags: list[str] = []
@@ -1238,6 +1266,14 @@ class SubtensorMonitor:
         if not candidates:
             return 0.0
         return round(max(candidates) / RAO_PER_TAO, 9)
+
+    def _estimate_limit_price_tao(self, payload: Any) -> float:
+        # 没有成交事件时，用 Alpha 数量乘以 limit_price 得到 TAO 估算值，仍不参与阈值判断。
+        alpha_candidates = self._collect_alpha_amount_candidates(payload)
+        price_candidates = self._collect_limit_price_candidates(payload)
+        if not alpha_candidates or not price_candidates:
+            return 0.0
+        return round((max(alpha_candidates) * max(price_candidates)) / RAO_PER_TAO / RAO_PER_TAO, 9)
 
     def _subnet_label_for_action(self, action_type: str, subnet_ids: list[int]) -> str:
         # 余额普通转账本身不带子网字段，显示“无子网字段”比“未知”更准确。

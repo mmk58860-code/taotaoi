@@ -283,9 +283,9 @@ def event_trade_signal(event: ChainEvent) -> dict[str, object]:
         "stake_swap",
         "swap_call",
     }:
-        alpha_amount = fallback_alpha_amount(event)
-        if alpha_amount > 0:
-            amount_label = f"{alpha_amount:.6f} Alpha（TAO待确认）"
+        estimated_tao = fallback_limit_price_tao(event)
+        if estimated_tao > 0:
+            amount_label = f"约 {estimated_tao:.6f} TAO（按限价估算）"
         else:
             amount_label = "未确认 TAO 成交额"
 
@@ -352,6 +352,24 @@ def fallback_alpha_amount(event: ChainEvent) -> float:
     if not candidates:
         return 0.0
     return round(max(candidates) / 1_000_000_000, 9)
+
+
+def fallback_limit_price_tao(event: ChainEvent) -> float:
+    # remove_stake_limit 这类调用没有事件时，用 Alpha 数量乘以 limit_price 给 TAO 估算值。
+    if event.action_type not in {"stake_remove", "stake_swap", "swap_call"}:
+        return 0.0
+    try:
+        raw = json.loads(event.raw_payload or "{}")
+    except Exception:
+        return 0.0
+    if not isinstance(raw, dict):
+        return 0.0
+    params = raw.get("leaf_call", raw)
+    alpha_candidates = collect_alpha_amount_candidates(params)
+    price_candidates = collect_limit_price_candidates(params)
+    if not alpha_candidates or not price_candidates:
+        return 0.0
+    return round((max(alpha_candidates) * max(price_candidates)) / 1_000_000_000 / 1_000_000_000, 9)
 
 
 def subnet_label_for_action(action_type: str, subnet_ids: list[int]) -> str:
@@ -641,6 +659,34 @@ def collect_alpha_amount_candidates(payload) -> list[int]:
     elif isinstance(payload, list):
         for item in payload:
             results.extend(collect_alpha_amount_candidates(item))
+    return results
+
+
+def collect_limit_price_candidates(payload) -> list[int]:
+    # TAO 限价通常以 TaoBalance 存在，只用于估算 TAO，不参与数据库阈值判断。
+    results: list[int] = []
+
+    def is_limit_price_key(key_text: str, type_text: str = "") -> bool:
+        key_text = key_text.lower()
+        type_text = type_text.lower()
+        return "limit_price" in key_text or ("price" in key_text and "taobalance" in type_text)
+
+    if isinstance(payload, dict):
+        param_name = str(payload.get("name", payload.get("param", "")))
+        type_name = str(payload.get("type", payload.get("type_name", "")))
+        if is_limit_price_key(param_name, type_name):
+            parsed = to_int(payload.get("value"))
+            if parsed is not None and parsed > 0:
+                results.append(parsed)
+        for key, value in payload.items():
+            if key != "value" and is_limit_price_key(str(key), type_name):
+                parsed = to_int(value)
+                if parsed is not None and parsed > 0:
+                    results.append(parsed)
+            results.extend(collect_limit_price_candidates(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            results.extend(collect_limit_price_candidates(item))
     return results
 
 
