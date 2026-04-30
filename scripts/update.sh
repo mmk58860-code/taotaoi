@@ -47,7 +47,10 @@ env_path = Path(sys.argv[1])
 updates = {
     "CLEANUP_RETENTION_HOURS": "1",
     "CLEANUP_INTERVAL_MINUTES": "10",
+    "TAOSTATS_ENABLED": "false",
+    "TAOSTATS_API_KEY": "",
 }
+preserve_existing = {"TAOSTATS_ENABLED", "TAOSTATS_API_KEY"}
 lines = env_path.read_text(encoding="utf-8").splitlines()
 seen = set()
 out = []
@@ -57,7 +60,9 @@ for line in lines:
         continue
     key, _, _ = line.partition("=")
     if key in updates:
-        out.append(f"{key}={updates[key]}")
+        current_value = line.partition("=")[2]
+        value = current_value if key in preserve_existing and current_value else updates[key]
+        out.append(f"{key}={value}")
         seen.add(key)
     else:
         out.append(line)

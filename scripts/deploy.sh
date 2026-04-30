@@ -177,6 +177,8 @@ updates = {
     "ADMIN_PASSWORD": admin_password,
     "SECRET_KEY": secret_key,
     "DATABASE_URL": database_url,
+    "TAOSTATS_ENABLED": "false",
+    "TAOSTATS_API_KEY": "",
 }
 
 lines = env_path.read_text(encoding="utf-8").splitlines()

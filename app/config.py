@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     cleanup_retention_days: int = Field(default=1, alias="CLEANUP_RETENTION_DAYS")
     cleanup_retention_hours: int = Field(default=1, alias="CLEANUP_RETENTION_HOURS")
     cleanup_interval_minutes: int = Field(default=10, alias="CLEANUP_INTERVAL_MINUTES")
+    taostats_enabled: bool = Field(default=False, alias="TAOSTATS_ENABLED")
+    taostats_api_key: str = Field(default="", alias="TAOSTATS_API_KEY")
 
     @property
     def sqlite_path(self) -> Path | None:

@@ -9,6 +9,7 @@
 - 当交易涉及监控钱包时，立即记录并推送到当前账号自己的 Telegram。
 - 当交易涉及监控钱包时一定推送 Telegram；其他非监控钱包交易先记录命中，暂不主动推送。
 - 通过网页管理链节点、个人 Telegram 参数、个人阈值和钱包列表。
+- 可选接入 TaoStats API，用于在链上事件缺失时补全减仓实际 TAO 成交额。
 - 使用本机 PostgreSQL 保存配置、钱包、事件和扫描进度，更新部署时不会丢数据。
 - 提供后台账号体系：总管理员可创建普通账号给朋友使用，普通账号之间的钱包和事件互相隔离。
 - 支持每天固定时间自动清理旧命中记录，避免历史数据长期堆积。
@@ -20,6 +21,7 @@
 - `PostgreSQL + SQLAlchemy + Alembic`：配置、钱包、事件、账号、用户通知队列、扫描状态和数据库迁移。
 - `substrate-interface`：连接 Subtensor WebSocket，逐块解码 extrinsic 和关联事件。
 - `httpx`：调用 Telegram Bot API。
+- `TaoStats API`：可选补全动态 TAO 减仓成交额。
 - `systemd`：Ubuntu 开机自启与自动拉起。
 
 ## 目录
@@ -96,6 +98,15 @@ CLEANUP_TIME=04:00
 CLEANUP_RETENTION_DAYS=1
 CLEANUP_RETENTION_HOURS=1
 CLEANUP_INTERVAL_MINUTES=10
+TAOSTATS_ENABLED=false
+TAOSTATS_API_KEY=
+```
+
+如果你申请了 TaoStats API Key，可以改成：
+
+```env
+TAOSTATS_ENABLED=true
+TAOSTATS_API_KEY=你的 TaoStats API Key
 ```
 
 历史命中自动清理默认开启，每 10 分钟删除 1 小时前的 `chain_events` 命中记录；只清理历史命中，不会删除钱包、菜单、账号、TG 或系统设置。页面默认展示 50 条，并尽量覆盖最近 1 小时内的数据。

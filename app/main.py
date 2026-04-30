@@ -278,6 +278,8 @@ def event_trade_signal(event: ChainEvent) -> dict[str, object]:
     else:
         signal = direction
     amount_label = f"{normalized_amount:.6f} TAO"
+    if normalized_amount > 0 and raw_completion_source(event) == "taostats":
+        amount_label = f"{normalized_amount:.6f} TAO（TaoStats）"
     if normalized_amount <= 0 and event.action_type in {
         "stake_remove",
         "stake_move",
@@ -397,6 +399,16 @@ def fallback_subnet_price_tao(event: ChainEvent) -> float:
     if parsed is None or parsed <= 0:
         return 0.0
     return round(parsed, 9)
+
+
+def raw_completion_source(event: ChainEvent) -> str:
+    try:
+        raw = json.loads(event.raw_payload or "{}")
+    except Exception:
+        return ""
+    if not isinstance(raw, dict):
+        return ""
+    return str(raw.get("tao_completion_source") or "")
 
 
 def subnet_label_for_action(action_type: str, subnet_ids: list[int]) -> str:

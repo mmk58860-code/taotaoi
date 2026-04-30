@@ -13,10 +13,12 @@ from typing import Any
 from sqlalchemy import select
 from substrateinterface import SubstrateInterface
 
+from app.config import get_settings
 from app.database import session_scope
 from app.models import ChainEvent, MonitorMenu, MonitorState, NotificationOutbox, WalletWatch
 from app.services.monitor_menu_service import BUILTIN_ALERT_KIND
 from app.services.settings_service import get_system_runtime_settings, typed_system_runtime_settings
+from app.services.taostats import TaoStatsClient
 
 
 logger = logging.getLogger(__name__)
@@ -140,6 +142,13 @@ class TaoPriceEstimate:
     source: str
 
 
+@dataclass
+class TaoStatsEstimate:
+    amount_tao: float
+    netuid: int | None
+    source_payload: dict[str, Any]
+
+
 class SubtensorMonitor:
     def __init__(self) -> None:
         # 监听任务会在 FastAPI 生命周期内启动和关闭。
@@ -236,11 +245,14 @@ class SubtensorMonitor:
             for row in rows:
                 related_events = self._fetch_related_events_for_chain_event(substrate, row)
                 amount_tao = self._estimate_amount_tao_from_events(row.action_type, related_events)
+                taostats_estimate = None
                 price_estimate = None
                 if amount_tao <= 0:
+                    taostats_estimate = self._estimate_taostats_amount_tao(row)
+                if amount_tao <= 0 and taostats_estimate is None:
                     price_estimate = self._estimate_subnet_price_tao(substrate, row)
-                self._store_completion_result(row.id, related_events, amount_tao, price_estimate)
-                if amount_tao > 0 or price_estimate is not None:
+                self._store_completion_result(row.id, related_events, amount_tao, taostats_estimate, price_estimate)
+                if amount_tao > 0 or taostats_estimate is not None or price_estimate is not None:
                     completed_count += 1
         finally:
             close = getattr(substrate, "close", None)
@@ -271,6 +283,54 @@ class SubtensorMonitor:
         if not candidates:
             return 0.0
         return round(max(candidates) / RAO_PER_TAO, 9)
+
+    def _estimate_taostats_amount_tao(self, row: ChainEvent) -> TaoStatsEstimate | None:
+        settings = get_settings()
+        if not settings.taostats_enabled or not settings.taostats_api_key:
+            return None
+        if row.action_type != "stake_remove":
+            return None
+        payload = self._safe_json_loads(row.raw_payload)
+        if not isinstance(payload, dict):
+            return None
+        params = payload.get("leaf_call", payload)
+        subnet_ids = self._extract_subnet_ids(params)
+        netuid = subnet_ids[0] if subnet_ids else None
+
+        client = TaoStatsClient(settings.taostats_api_key)
+        rows = client.fetch_stake_events(
+            block_number=int(row.block_number),
+            extrinsic_index=int(row.extrinsic_index or 0),
+            netuid=netuid,
+        )
+        for item in rows:
+            amount_tao = self._extract_taostats_tao_amount(item)
+            if amount_tao > 0:
+                return TaoStatsEstimate(
+                    amount_tao=amount_tao,
+                    netuid=netuid,
+                    source_payload=item,
+                )
+        return None
+
+    def _extract_taostats_tao_amount(self, payload: Any) -> float:
+        # TaoStats 返回字段可能随接口版本变化，优先读取明确带 TAO/rao 语义且不含 alpha 的金额字段。
+        candidates = self._collect_tao_amount_candidates(payload)
+        if candidates:
+            return round(max(candidates) / RAO_PER_TAO, 9)
+        normalized = self._normalize_value(payload)
+        if not isinstance(normalized, dict):
+            return 0.0
+        for key in ("amount_tao", "tao_amount", "tao", "received_tao", "tao_received"):
+            value = normalized.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return round(float(value), 9)
+            if isinstance(value, str):
+                with suppress(ValueError):
+                    parsed = float(value.replace(",", "").replace("_", ""))
+                    if parsed > 0:
+                        return round(parsed, 9)
+        return 0.0
 
     def _estimate_subnet_price_tao(
         self,
@@ -386,6 +446,7 @@ class SubtensorMonitor:
         event_id: int,
         related_events: list[EventEnvelope],
         amount_tao: float,
+        taostats_estimate: TaoStatsEstimate | None = None,
         price_estimate: TaoPriceEstimate | None = None,
     ) -> None:
         with session_scope() as session:
@@ -403,6 +464,17 @@ class SubtensorMonitor:
                 payload["tao_completion_status"] = "completed"
                 row.message = self._replace_unconfirmed_amount_label(row.message, amount_tao)
                 logger.info("已补全减仓成交额 event_id=%s amount_tao=%s", event_id, amount_tao)
+            elif taostats_estimate is not None:
+                row.amount_tao = taostats_estimate.amount_tao
+                payload["tao_completion_status"] = "completed"
+                payload["tao_completion_source"] = "taostats"
+                payload["taostats_result"] = taostats_estimate.source_payload
+                payload["taostats_netuid"] = taostats_estimate.netuid
+                row.message = self._replace_amount_label_with_text(
+                    row.message,
+                    f"{taostats_estimate.amount_tao:.6f} TAO（TaoStats）",
+                )
+                logger.info("已用 TaoStats 补全减仓成交额 event_id=%s amount_tao=%s", event_id, taostats_estimate.amount_tao)
             elif price_estimate is not None:
                 payload["tao_completion_status"] = "not_found"
                 payload["tao_estimate_status"] = "estimated"
