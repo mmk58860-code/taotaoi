@@ -179,6 +179,7 @@ updates = {
     "DATABASE_URL": database_url,
     "TAOSTATS_ENABLED": "false",
     "TAOSTATS_API_KEY": "",
+    "TAOSTATS_API_KEYS": "",
     "TAOSTATS_AMOUNT_MODE": "fallback",
     "TAOSTATS_REQUEST_INTERVAL_SECONDS": "2",
     "TAOSTATS_RATE_LIMIT_COOLDOWN_SECONDS": "60",

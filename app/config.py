@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     cleanup_interval_minutes: int = Field(default=10, alias="CLEANUP_INTERVAL_MINUTES")
     taostats_enabled: bool = Field(default=False, alias="TAOSTATS_ENABLED")
     taostats_api_key: str = Field(default="", alias="TAOSTATS_API_KEY")
+    taostats_api_keys: str = Field(default="", alias="TAOSTATS_API_KEYS")
     taostats_amount_mode: str = Field(default="fallback", alias="TAOSTATS_AMOUNT_MODE")
     taostats_request_interval_seconds: float = Field(default=2.0, alias="TAOSTATS_REQUEST_INTERVAL_SECONDS")
     taostats_rate_limit_cooldown_seconds: int = Field(default=60, alias="TAOSTATS_RATE_LIMIT_COOLDOWN_SECONDS")

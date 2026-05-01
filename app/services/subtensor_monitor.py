@@ -324,6 +324,7 @@ class SubtensorMonitor:
     def _build_taostats_client(self, settings) -> TaoStatsClient:
         return TaoStatsClient(
             settings.taostats_api_key,
+            api_keys=settings.taostats_api_keys,
             request_interval_seconds=settings.taostats_request_interval_seconds,
             rate_limit_cooldown_seconds=settings.taostats_rate_limit_cooldown_seconds,
         )
@@ -334,7 +335,7 @@ class SubtensorMonitor:
         client: TaoStatsClient | None = None,
     ) -> TaoStatsEstimate | None:
         settings = get_settings()
-        if not settings.taostats_enabled or not settings.taostats_api_key:
+        if not settings.taostats_enabled or not (settings.taostats_api_key or settings.taostats_api_keys):
             return None
         if row.action_type != "stake_remove":
             return None

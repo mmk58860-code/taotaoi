@@ -108,6 +108,7 @@ TAOSTATS_AMOUNT_MODE=fallback
 ```env
 TAOSTATS_ENABLED=true
 TAOSTATS_API_KEY=你的 TaoStats API Key
+TAOSTATS_API_KEYS=备用key1,备用key2
 TAOSTATS_AMOUNT_MODE=only
 TAOSTATS_REQUEST_INTERVAL_SECONDS=2
 TAOSTATS_RATE_LIMIT_COOLDOWN_SECONDS=60
@@ -116,6 +117,7 @@ TAOSTATS_RETRY_COOLDOWN_SECONDS=120
 
 `TAOSTATS_AMOUNT_MODE=only` 表示减仓金额只看 TaoStats，适合测试免费额度和数据准确性；如果 TaoStats 未返回，页面会明确显示“等待 TaoStats”或“TaoStats未返回”，不会再混入子网价格或限价估算。
 免费额度容易触发 `429 Too Many Requests` 时，可以把 `TAOSTATS_REQUEST_INTERVAL_SECONDS` 和 `TAOSTATS_RETRY_COOLDOWN_SECONDS` 调大。
+如果你有多个合法 TaoStats API Key，可以把备用 key 放到 `TAOSTATS_API_KEYS`，某个 key 触发 429 时会自动切换下一个 key，并让触发 429 的 key 冷却一段时间。
 
 历史命中自动清理默认开启，每 10 分钟删除 1 小时前的 `chain_events` 命中记录；只清理历史命中，不会删除钱包、菜单、账号、TG 或系统设置。页面默认展示 50 条，并尽量覆盖最近 1 小时内的数据。
 
