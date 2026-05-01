@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     taostats_enabled: bool = Field(default=False, alias="TAOSTATS_ENABLED")
     taostats_api_key: str = Field(default="", alias="TAOSTATS_API_KEY")
     taostats_amount_mode: str = Field(default="fallback", alias="TAOSTATS_AMOUNT_MODE")
+    taostats_request_interval_seconds: float = Field(default=2.0, alias="TAOSTATS_REQUEST_INTERVAL_SECONDS")
+    taostats_rate_limit_cooldown_seconds: int = Field(default=60, alias="TAOSTATS_RATE_LIMIT_COOLDOWN_SECONDS")
+    taostats_retry_cooldown_seconds: int = Field(default=120, alias="TAOSTATS_RETRY_COOLDOWN_SECONDS")
 
     @property
     def sqlite_path(self) -> Path | None:

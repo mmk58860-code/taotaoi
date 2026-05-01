@@ -180,6 +180,9 @@ updates = {
     "TAOSTATS_ENABLED": "false",
     "TAOSTATS_API_KEY": "",
     "TAOSTATS_AMOUNT_MODE": "fallback",
+    "TAOSTATS_REQUEST_INTERVAL_SECONDS": "2",
+    "TAOSTATS_RATE_LIMIT_COOLDOWN_SECONDS": "60",
+    "TAOSTATS_RETRY_COOLDOWN_SECONDS": "120",
 }
 
 lines = env_path.read_text(encoding="utf-8").splitlines()

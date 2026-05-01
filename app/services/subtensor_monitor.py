@@ -244,7 +244,9 @@ class SubtensorMonitor:
             return 0
 
         substrate = SubstrateInterface(url=str(typed["subtensor_ws_url"]))
+        taostats_client = self._build_taostats_client(settings)
         completed_count = 0
+        attempted_taostats = 0
         try:
             for row in rows:
                 related_events: list[EventEnvelope] = []
@@ -252,14 +254,29 @@ class SubtensorMonitor:
                 taostats_estimate = None
                 price_estimate = None
                 if taostats_mode in {"primary", "only"}:
-                    taostats_estimate = self._estimate_taostats_amount_tao(row)
+                    if not self._taostats_retry_due(row, settings.taostats_retry_cooldown_seconds):
+                        continue
+                    if attempted_taostats >= 3:
+                        logger.info("本轮 TaoStats 免费额度保护：已尝试 3 条，暂停到下一轮")
+                        break
+                    taostats_estimate = self._estimate_taostats_amount_tao(row, taostats_client)
+                    attempted_taostats += 1
 
                 if taostats_estimate is None and taostats_mode != "only":
                     related_events = self._fetch_related_events_for_chain_event(substrate, row)
                     amount_tao = self._estimate_amount_tao_from_events(row.action_type, related_events)
 
-                if amount_tao <= 0 and taostats_estimate is None and taostats_mode == "fallback":
-                    taostats_estimate = self._estimate_taostats_amount_tao(row)
+                if (
+                    amount_tao <= 0
+                    and taostats_estimate is None
+                    and taostats_mode == "fallback"
+                    and self._taostats_retry_due(row, settings.taostats_retry_cooldown_seconds)
+                ):
+                    if attempted_taostats >= 3:
+                        logger.info("本轮 TaoStats 免费额度保护：已尝试 3 条，暂停到下一轮")
+                        break
+                    taostats_estimate = self._estimate_taostats_amount_tao(row, taostats_client)
+                    attempted_taostats += 1
 
                 if amount_tao <= 0 and taostats_estimate is None and taostats_mode != "only":
                     price_estimate = self._estimate_subnet_price_tao(substrate, row)
@@ -304,7 +321,18 @@ class SubtensorMonitor:
             return 0.0
         return round(max(candidates) / RAO_PER_TAO, 9)
 
-    def _estimate_taostats_amount_tao(self, row: ChainEvent) -> TaoStatsEstimate | None:
+    def _build_taostats_client(self, settings) -> TaoStatsClient:
+        return TaoStatsClient(
+            settings.taostats_api_key,
+            request_interval_seconds=settings.taostats_request_interval_seconds,
+            rate_limit_cooldown_seconds=settings.taostats_rate_limit_cooldown_seconds,
+        )
+
+    def _estimate_taostats_amount_tao(
+        self,
+        row: ChainEvent,
+        client: TaoStatsClient | None = None,
+    ) -> TaoStatsEstimate | None:
         settings = get_settings()
         if not settings.taostats_enabled or not settings.taostats_api_key:
             return None
@@ -317,11 +345,12 @@ class SubtensorMonitor:
         subnet_ids = self._extract_subnet_ids(params)
         netuid = subnet_ids[0] if subnet_ids else None
 
-        client = TaoStatsClient(settings.taostats_api_key)
+        if client is None:
+            client = self._build_taostats_client(settings)
         rows = client.fetch_stake_events(
             block_number=int(row.block_number),
             extrinsic_index=int(row.extrinsic_index or 0),
-            netuid=netuid,
+            netuid=None,
         )
         for item in rows:
             amount_tao = self._extract_taostats_tao_amount(item)
@@ -332,6 +361,19 @@ class SubtensorMonitor:
                     source_payload=item,
                 )
         return None
+
+    def _taostats_retry_due(self, row: ChainEvent, cooldown_seconds: int) -> bool:
+        payload = self._safe_json_loads(row.raw_payload)
+        if not isinstance(payload, dict):
+            return True
+        checked_at = payload.get("taostats_checked_at") or payload.get("tao_completion_checked_at")
+        if not checked_at:
+            return True
+        try:
+            checked_dt = datetime.fromisoformat(str(checked_at))
+        except ValueError:
+            return True
+        return datetime.utcnow() - checked_dt >= timedelta(seconds=max(10, int(cooldown_seconds)))
 
     def _taostats_amount_mode(self, value: str) -> str:
         mode = str(value or "fallback").strip().lower()
@@ -485,7 +527,10 @@ class SubtensorMonitor:
                 payload = {}
             if related_events:
                 payload["related_events"] = [event.payload for event in related_events]
-            payload["tao_completion_checked_at"] = datetime.utcnow().isoformat()
+            checked_at = datetime.utcnow().isoformat()
+            payload["tao_completion_checked_at"] = checked_at
+            if taostats_estimate is not None or taostats_only:
+                payload["taostats_checked_at"] = checked_at
             if amount_tao > 0:
                 row.amount_tao = amount_tao
                 payload["tao_completion_status"] = "completed"
