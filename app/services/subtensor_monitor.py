@@ -459,6 +459,7 @@ class SubtensorMonitor:
             for menu_id, profile in profile_map.items()
             if profile.menu_kind == BUILTIN_ALERT_KIND and profile.threshold_tao > 0
         }
+        row_count = len(rows)
         for row_index, row in enumerate(rows):
             amount_tao = self._extract_taostats_tao_amount(row)
             if amount_tao <= 0:
@@ -554,6 +555,15 @@ class SubtensorMonitor:
                         telegram_chat_id=profile.telegram_chat_id,
                     )
                 )
+        if row_count:
+            logger.info(
+                "TaoStats 区块解析 block=%s rows=%s actions=%s alert_profiles=%s wallets=%s",
+                block_number,
+                row_count,
+                len(actions),
+                len(alert_profiles),
+                len(watch_map),
+            )
         return actions
 
     def _build_taostats_message(
