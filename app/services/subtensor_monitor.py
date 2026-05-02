@@ -693,7 +693,97 @@ class SubtensorMonitor:
                 exchange_positive,
                 exchange_matched,
             )
-        return actions
+        return self._collapse_taostats_composite_actions(actions)
+
+    def _collapse_taostats_composite_actions(self, actions: list[ActionRecord]) -> list[ActionRecord]:
+        # TaoStats 有时会把同一笔复合交易拆成一条加仓和一条减仓；页面应尽量合并成“换仓”。
+        grouped: dict[tuple[Any, ...], list[ActionRecord]] = {}
+        passthrough: list[ActionRecord] = []
+        for action in actions:
+            payload = self._safe_json_loads(action.raw_payload)
+            if not isinstance(payload, dict) or str(payload.get("source") or "") != "taostats":
+                passthrough.append(action)
+                continue
+            if action.action_type not in {"stake_add", "stake_remove"}:
+                passthrough.append(action)
+                continue
+            group_key = (
+                action.owner_user_id,
+                action.monitor_menu_id,
+                action.block_number,
+                action.extrinsic_index,
+                action.signer_address,
+            )
+            grouped.setdefault(group_key, []).append(action)
+
+        merged: list[ActionRecord] = list(passthrough)
+        for _, bucket in grouped.items():
+            adds = [item for item in bucket if item.action_type == "stake_add"]
+            removes = [item for item in bucket if item.action_type == "stake_remove"]
+            if adds and removes:
+                merged.append(self._merge_taostats_swap_action(adds[0], removes[0]))
+                continue
+            merged.extend(bucket)
+        return merged
+
+    def _merge_taostats_swap_action(self, add_action: ActionRecord, remove_action: ActionRecord) -> ActionRecord:
+        payload = self._safe_json_loads(remove_action.raw_payload)
+        if not isinstance(payload, dict):
+            payload = {}
+        payload["action_type"] = "stake_swap"
+        payload["taostats_swap_components"] = {
+            "stake_add": self._safe_json_loads(add_action.raw_payload),
+            "stake_remove": self._safe_json_loads(remove_action.raw_payload),
+        }
+        amount_tao = max(float(add_action.amount_tao or 0), float(remove_action.amount_tao or 0))
+        netuid = payload.get("taostats_netuid")
+        if netuid is None:
+            add_payload = self._safe_json_loads(add_action.raw_payload)
+            if isinstance(add_payload, dict):
+                netuid = add_payload.get("taostats_netuid")
+                if netuid is not None:
+                    payload["taostats_netuid"] = netuid
+        message = self._build_taostats_message(
+            action_type="stake_swap",
+            amount_tao=amount_tao,
+            block_number=remove_action.block_number,
+            extrinsic_index=remove_action.extrinsic_index,
+            netuid=self._to_int(netuid),
+            signer_address=remove_action.signer_address or add_action.signer_address,
+            primary_from=remove_action.from_address,
+            primary_to=add_action.to_address or remove_action.to_address,
+            involved_addresses=list(dict.fromkeys(remove_action.involved_addresses + add_action.involved_addresses)),
+            matched_aliases=list(dict.fromkeys(remove_action.matched_aliases + add_action.matched_aliases)),
+            watched=bool(remove_action.matched_aliases or add_action.matched_aliases),
+            above_threshold=remove_action.should_notify or add_action.should_notify,
+            threshold_tao=0,
+        )
+        return ActionRecord(
+            monitor_menu_id=remove_action.monitor_menu_id,
+            owner_user_id=remove_action.owner_user_id,
+            menu_name=remove_action.menu_name,
+            block_number=remove_action.block_number,
+            event_index=min(remove_action.event_index, add_action.event_index),
+            extrinsic_index=remove_action.extrinsic_index,
+            pallet="TaoStats",
+            event_name="swap",
+            action_type="stake_swap",
+            call_name="taostats_swap",
+            amount_tao=amount_tao,
+            from_address=remove_action.from_address,
+            to_address=add_action.to_address or remove_action.to_address,
+            signer_address=remove_action.signer_address or add_action.signer_address,
+            extrinsic_hash=remove_action.extrinsic_hash or add_action.extrinsic_hash,
+            success=True,
+            failure_reason=None,
+            involved_addresses=list(dict.fromkeys(remove_action.involved_addresses + add_action.involved_addresses)),
+            matched_aliases=list(dict.fromkeys(remove_action.matched_aliases + add_action.matched_aliases)),
+            message=message,
+            raw_payload=json.dumps(payload, ensure_ascii=False, default=str),
+            should_notify=remove_action.should_notify or add_action.should_notify,
+            telegram_bot_token=remove_action.telegram_bot_token or add_action.telegram_bot_token,
+            telegram_chat_id=remove_action.telegram_chat_id or add_action.telegram_chat_id,
+        )
 
     def _build_taostats_message(
         self,
@@ -716,13 +806,25 @@ class SubtensorMonitor:
             tags.append(f"监控钱包: {', '.join(matched_aliases)}")
         if above_threshold:
             tags.append(f"大额阈值: >= {threshold_tao} TAO")
-        title = "🟢 增加质押" if action_type == "stake_add" else "🔴 减少质押"
-        direction = "买入 / 加仓" if action_type == "stake_add" else "卖出 / 减仓"
-        signal = "TaoStats 加仓" if action_type == "stake_add" else "TaoStats 减仓"
+        if action_type == "stake_add":
+            title = "🟢 增加质押"
+            direction = "买入 / 加仓"
+            signal = "TaoStats 加仓"
+            method = "delegate"
+        elif action_type == "stake_swap":
+            title = "🟡 交换质押"
+            direction = "换仓"
+            signal = "TaoStats 换仓"
+            method = "swap"
+        else:
+            title = "🔴 减少质押"
+            direction = "卖出 / 减仓"
+            signal = "TaoStats 减仓"
+            method = "undelegate"
         lines = [
             f"<b>{title}</b>",
             "状态: <b>成功</b>",
-            f"调用: <code>TaoStats.{ 'delegate' if action_type == 'stake_add' else 'undelegate' }</code>",
+            f"调用: <code>TaoStats.{method}</code>",
             f"子网: <b>{f'子网 {netuid}' if netuid is not None else '未知子网'}</b>",
             f"方向: <b>{direction}</b>",
             f"信号: <b>{signal}</b>",
