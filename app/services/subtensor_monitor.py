@@ -47,6 +47,8 @@ ACTION_TITLES: dict[str, str] = {
     "transfer": "普通转账",
     "stake_add": "增加质押",
     "stake_remove": "减少质押",
+    "delegate_add": "委托增加",
+    "delegate_remove": "委托减少",
     "stake_move": "移动质押",
     "stake_transfer": "转移质押",
     "stake_swap": "交换质押",
@@ -473,7 +475,7 @@ class SubtensorMonitor:
         exchange_matched = 0
         for row_index, row in enumerate(delegation_rows):
             action_type = self._taostats_row_action_type(row)
-            if action_type not in {"stake_add", "stake_remove"}:
+            if action_type not in {"delegate_add", "delegate_remove"}:
                 continue
             delegation_supported += 1
             amount_tao = self._extract_taostats_tao_amount(row)
@@ -693,97 +695,7 @@ class SubtensorMonitor:
                 exchange_positive,
                 exchange_matched,
             )
-        return self._collapse_taostats_composite_actions(actions)
-
-    def _collapse_taostats_composite_actions(self, actions: list[ActionRecord]) -> list[ActionRecord]:
-        # TaoStats 有时会把同一笔复合交易拆成一条加仓和一条减仓；页面应尽量合并成“换仓”。
-        grouped: dict[tuple[Any, ...], list[ActionRecord]] = {}
-        passthrough: list[ActionRecord] = []
-        for action in actions:
-            payload = self._safe_json_loads(action.raw_payload)
-            if not isinstance(payload, dict) or str(payload.get("source") or "") != "taostats":
-                passthrough.append(action)
-                continue
-            if action.action_type not in {"stake_add", "stake_remove"}:
-                passthrough.append(action)
-                continue
-            group_key = (
-                action.owner_user_id,
-                action.monitor_menu_id,
-                action.block_number,
-                action.extrinsic_index,
-                action.signer_address,
-            )
-            grouped.setdefault(group_key, []).append(action)
-
-        merged: list[ActionRecord] = list(passthrough)
-        for _, bucket in grouped.items():
-            adds = [item for item in bucket if item.action_type == "stake_add"]
-            removes = [item for item in bucket if item.action_type == "stake_remove"]
-            if adds and removes:
-                merged.append(self._merge_taostats_swap_action(adds[0], removes[0]))
-                continue
-            merged.extend(bucket)
-        return merged
-
-    def _merge_taostats_swap_action(self, add_action: ActionRecord, remove_action: ActionRecord) -> ActionRecord:
-        payload = self._safe_json_loads(remove_action.raw_payload)
-        if not isinstance(payload, dict):
-            payload = {}
-        payload["action_type"] = "stake_swap"
-        payload["taostats_swap_components"] = {
-            "stake_add": self._safe_json_loads(add_action.raw_payload),
-            "stake_remove": self._safe_json_loads(remove_action.raw_payload),
-        }
-        amount_tao = max(float(add_action.amount_tao or 0), float(remove_action.amount_tao or 0))
-        netuid = payload.get("taostats_netuid")
-        if netuid is None:
-            add_payload = self._safe_json_loads(add_action.raw_payload)
-            if isinstance(add_payload, dict):
-                netuid = add_payload.get("taostats_netuid")
-                if netuid is not None:
-                    payload["taostats_netuid"] = netuid
-        message = self._build_taostats_message(
-            action_type="stake_swap",
-            amount_tao=amount_tao,
-            block_number=remove_action.block_number,
-            extrinsic_index=remove_action.extrinsic_index,
-            netuid=self._to_int(netuid),
-            signer_address=remove_action.signer_address or add_action.signer_address,
-            primary_from=remove_action.from_address,
-            primary_to=add_action.to_address or remove_action.to_address,
-            involved_addresses=list(dict.fromkeys(remove_action.involved_addresses + add_action.involved_addresses)),
-            matched_aliases=list(dict.fromkeys(remove_action.matched_aliases + add_action.matched_aliases)),
-            watched=bool(remove_action.matched_aliases or add_action.matched_aliases),
-            above_threshold=remove_action.should_notify or add_action.should_notify,
-            threshold_tao=0,
-        )
-        return ActionRecord(
-            monitor_menu_id=remove_action.monitor_menu_id,
-            owner_user_id=remove_action.owner_user_id,
-            menu_name=remove_action.menu_name,
-            block_number=remove_action.block_number,
-            event_index=min(remove_action.event_index, add_action.event_index),
-            extrinsic_index=remove_action.extrinsic_index,
-            pallet="TaoStats",
-            event_name="swap",
-            action_type="stake_swap",
-            call_name="taostats_swap",
-            amount_tao=amount_tao,
-            from_address=remove_action.from_address,
-            to_address=add_action.to_address or remove_action.to_address,
-            signer_address=remove_action.signer_address or add_action.signer_address,
-            extrinsic_hash=remove_action.extrinsic_hash or add_action.extrinsic_hash,
-            success=True,
-            failure_reason=None,
-            involved_addresses=list(dict.fromkeys(remove_action.involved_addresses + add_action.involved_addresses)),
-            matched_aliases=list(dict.fromkeys(remove_action.matched_aliases + add_action.matched_aliases)),
-            message=message,
-            raw_payload=json.dumps(payload, ensure_ascii=False, default=str),
-            should_notify=remove_action.should_notify or add_action.should_notify,
-            telegram_bot_token=remove_action.telegram_bot_token or add_action.telegram_bot_token,
-            telegram_chat_id=remove_action.telegram_chat_id or add_action.telegram_chat_id,
-        )
+        return actions
 
     def _build_taostats_message(
         self,
@@ -806,11 +718,16 @@ class SubtensorMonitor:
             tags.append(f"监控钱包: {', '.join(matched_aliases)}")
         if above_threshold:
             tags.append(f"大额阈值: >= {threshold_tao} TAO")
-        if action_type == "stake_add":
-            title = "🟢 增加质押"
-            direction = "买入 / 加仓"
-            signal = "TaoStats 加仓"
+        if action_type == "delegate_add":
+            title = "🟢 委托增加"
+            direction = "委托增加"
+            signal = "TaoStats 委托增加"
             method = "delegate"
+        elif action_type == "delegate_remove":
+            title = "🔴 委托减少"
+            direction = "委托减少"
+            signal = "TaoStats 委托减少"
+            method = "undelegate"
         elif action_type == "stake_swap":
             title = "🟡 交换质押"
             direction = "换仓"
@@ -946,9 +863,9 @@ class SubtensorMonitor:
     def _taostats_row_action_type(self, row: dict[str, Any]) -> str:
         action = str(row.get("action") or "").strip().upper()
         if action == "DELEGATE":
-            return "stake_add"
+            return "delegate_add"
         if action == "UNDELEGATE":
-            return "stake_remove"
+            return "delegate_remove"
         return "generic_call"
 
     def _taostats_exchange_action_type(self, row: dict[str, Any]) -> str:

@@ -246,6 +246,8 @@ def event_trade_signal(event: ChainEvent) -> dict[str, object]:
     direction_map = {
         "stake_add": "买入 / 加仓",
         "stake_remove": "卖出 / 减仓",
+        "delegate_add": "委托增加",
+        "delegate_remove": "委托减少",
         "stake_move": "迁移仓位",
         "stake_transfer": "转移仓位",
         "stake_swap": "换仓",
@@ -264,7 +266,7 @@ def event_trade_signal(event: ChainEvent) -> dict[str, object]:
     except Exception:
         subnet_label = subnet_label_for_action(event.action_type, [])
 
-    if event.action_type in {"stake_add", "stake_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
+    if event.action_type in {"stake_add", "stake_remove", "delegate_add", "delegate_remove", "stake_move", "stake_transfer", "stake_swap", "swap_call"}:
         if normalized_amount >= 100:
             signal = f"大额{direction}"
         elif normalized_amount >= 10:
