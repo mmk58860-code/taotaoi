@@ -317,6 +317,8 @@ def normalized_trade_amount_tao(event: ChainEvent) -> float:
         return float(event.amount_tao or 0)
     if not isinstance(raw, dict):
         return float(event.amount_tao or 0)
+    if str(raw.get("source") or "") == "taostats" or str(raw.get("tao_completion_source") or "") == "taostats":
+        return float(event.amount_tao or 0)
     params = raw.get("leaf_call", raw)
     related_events = raw.get("related_events", [])
     action_type = str(raw.get("action_type") or event.action_type or "")
