@@ -32,8 +32,7 @@ class TaoStatsClient:
         self.timeout_seconds = timeout_seconds
         self.request_interval_seconds = max(0.0, float(request_interval_seconds))
         self.rate_limit_cooldown_seconds = max(5, int(rate_limit_cooldown_seconds))
-        self._block_cache: dict[int, list[dict[str, Any]]] = {}
-        self._exchange_cache: list[dict[str, Any]] = []
+        self._block_cache: dict[tuple[int, str], list[dict[str, Any]]] = {}
 
     def fetch_stake_events(
         self,
@@ -45,8 +44,9 @@ class TaoStatsClient:
     ) -> list[dict[str, Any]]:
         if not self.api_keys:
             return []
-        if int(block_number) in self._block_cache:
-            rows = self._block_cache[int(block_number)]
+        cache_key = (int(block_number), str(action or "undelegate").lower())
+        if cache_key in self._block_cache:
+            rows = self._block_cache[cache_key]
             return self._filter_rows(rows, block_number, extrinsic_index)
 
         params: dict[str, Any] = {
@@ -67,33 +67,47 @@ class TaoStatsClient:
             return []
 
         rows = self._extract_rows(response.json())
-        self._block_cache[int(block_number)] = rows
+        self._block_cache[cache_key] = rows
         return self._filter_rows(rows, block_number, extrinsic_index)
 
     def fetch_exchange_events(self, *, block_number: int, limit: int = 200, page: int = 1) -> list[dict[str, Any]]:
         if not self.api_keys:
             return []
-        if self._exchange_cache:
-            return self._filter_rows_by_block(self._exchange_cache, block_number)
+        cache_key = (int(block_number), "exchange")
+        if cache_key in self._block_cache:
+            return self._block_cache[cache_key]
 
-        params: dict[str, Any] = {
-            "limit": int(limit),
-            "page": int(page),
-        }
+        matched: list[dict[str, Any]] = []
+        current_page = int(page)
+        max_pages = 5
+        while current_page <= max_pages:
+            params: dict[str, Any] = {
+                "limit": int(limit),
+                "page": current_page,
+            }
+            try:
+                with httpx.Client(timeout=self.timeout_seconds) as client:
+                    response = self._request_with_key_pool(client, params, block_number, url=self.EXCHANGE_URL)
+                    if response is None:
+                        break
+                    response.raise_for_status()
+            except Exception as exc:
+                logger.info("TaoStats exchange 查询失败 block=%s page=%s error=%s", block_number, current_page, exc)
+                break
 
-        try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                response = self._request_with_key_pool(client, params, block_number, url=self.EXCHANGE_URL)
-                if response is None:
-                    return []
-                response.raise_for_status()
-        except Exception as exc:
-            logger.info("TaoStats exchange 查询失败 block=%s error=%s", block_number, exc)
-            return []
+            payload = response.json()
+            rows = self._extract_rows(payload)
+            page_matches = self._filter_rows_by_block(rows, block_number)
+            matched.extend(page_matches)
+            if page_matches:
+                continue
+            if not rows or not self._has_block_gte(rows, block_number):
+                break
+            current_page += 1
 
-        rows = self._extract_rows(response.json())
-        self._exchange_cache = rows
-        return self._filter_rows_by_block(rows, block_number)
+        deduped = self._dedupe_rows(matched)
+        self._block_cache[cache_key] = deduped
+        return deduped
 
     def fetch_latest_block_number(self) -> int:
         if not self.api_keys:
@@ -200,6 +214,20 @@ class TaoStatsClient:
             if parsed == int(block_number):
                 matched.append(row)
         return matched
+
+    def _has_block_gte(self, rows: list[dict[str, Any]], block_number: int) -> bool:
+        for row in rows:
+            parsed = self._to_int(row.get("block_number"))
+            if parsed is not None and parsed >= int(block_number):
+                return True
+        return False
+
+    def _dedupe_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            row_id = str(row.get("id") or row.get("extrinsic_id") or row.get("hash") or len(deduped))
+            deduped[row_id] = row
+        return list(deduped.values())
 
     def _auth_headers(self, key: str, *, use_bearer: bool = False) -> dict[str, str]:
         token = f"Bearer {key}" if use_bearer else key

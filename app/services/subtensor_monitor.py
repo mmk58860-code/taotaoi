@@ -299,10 +299,11 @@ class SubtensorMonitor:
             )
             if actions:
                 asyncio.run(self._persist_and_notify(actions))
-            completed += len(actions)
+                completed += len(actions)
             with session_scope() as session:
                 state = ensure_state(session)
-                state.last_scanned_block = block_number
+                if actions or block_number < latest_block:
+                    state.last_scanned_block = block_number
                 state.last_seen_head = latest_block
                 state.monitor_status = "running"
                 state.updated_at = datetime.utcnow()
