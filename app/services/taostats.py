@@ -39,6 +39,7 @@ class TaoStatsClient:
         block_number: int,
         extrinsic_index: int | None,
         netuid: int | None,
+        action: str = "undelegate",
     ) -> list[dict[str, Any]]:
         if not self.api_keys:
             return []
@@ -47,7 +48,7 @@ class TaoStatsClient:
             return self._filter_rows(rows, block_number, extrinsic_index)
 
         params: dict[str, Any] = {
-            "action": "undelegate",
+            "action": str(action or "undelegate").lower(),
             "block_number": int(block_number),
             "limit": 50,
             "page": 1,

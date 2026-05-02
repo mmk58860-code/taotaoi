@@ -288,7 +288,7 @@ class SubtensorMonitor:
 
         completed = 0
         for block_number in range(start_block, latest_block + 1):
-            rows = client.fetch_stake_events(block_number=block_number, extrinsic_index=None, netuid=None)
+            rows = client.fetch_stake_events(block_number=block_number, extrinsic_index=None, netuid=None, action="all")
             actions = self._build_actions_from_taostats_rows(
                 rows=rows,
                 block_number=block_number,
@@ -461,6 +461,9 @@ class SubtensorMonitor:
         }
         row_count = len(rows)
         for row_index, row in enumerate(rows):
+            action_type = self._taostats_row_action_type(row)
+            if action_type not in {"stake_add", "stake_remove"}:
+                continue
             amount_tao = self._extract_taostats_tao_amount(row)
             if amount_tao <= 0:
                 continue
@@ -491,7 +494,7 @@ class SubtensorMonitor:
                 "source": "taostats",
                 "tao_completion_status": "completed",
                 "tao_completion_source": "taostats",
-                "action_type": "stake_remove",
+                "action_type": action_type,
                 "taostats_result": row,
                 "involved_addresses": involved_addresses,
                 "taostats_netuid": netuid,
@@ -508,6 +511,7 @@ class SubtensorMonitor:
                 watched = bool(matched_aliases)
                 above_threshold = profile.menu_kind == BUILTIN_ALERT_KIND and amount_tao >= profile.threshold_tao
                 message = self._build_taostats_message(
+                    action_type=action_type,
                     amount_tao=amount_tao,
                     block_number=block_number,
                     extrinsic_index=extrinsic_index,
@@ -523,7 +527,7 @@ class SubtensorMonitor:
                 )
                 should_notify = self._should_notify_action(
                     profile=profile,
-                    action_type="stake_remove",
+                    action_type=action_type,
                     watched=watched,
                     above_threshold=above_threshold,
                 )
@@ -536,9 +540,9 @@ class SubtensorMonitor:
                         event_index=event_index,
                         extrinsic_index=extrinsic_index,
                         pallet="TaoStats",
-                        event_name="undelegate",
-                        action_type="stake_remove",
-                        call_name="taostats_undelegate",
+                        event_name=str(row.get("action") or "taostats_event").lower(),
+                        action_type=action_type,
+                        call_name=f"taostats_{str(row.get('action') or 'event').lower()}",
                         amount_tao=amount_tao,
                         from_address=primary_from,
                         to_address=primary_to,
@@ -557,7 +561,7 @@ class SubtensorMonitor:
                 )
         if row_count:
             logger.info(
-                "TaoStats 区块解析 block=%s rows=%s actions=%s alert_profiles=%s wallets=%s",
+                "TAOSTATS_PARSE block=%s rows=%s actions=%s alert_profiles=%s wallets=%s",
                 block_number,
                 row_count,
                 len(actions),
@@ -568,6 +572,7 @@ class SubtensorMonitor:
 
     def _build_taostats_message(
         self,
+        action_type: str,
         amount_tao: float,
         block_number: int,
         extrinsic_index: int,
@@ -586,13 +591,16 @@ class SubtensorMonitor:
             tags.append(f"监控钱包: {', '.join(matched_aliases)}")
         if above_threshold:
             tags.append(f"大额阈值: >= {threshold_tao} TAO")
+        title = "🟢 增加质押" if action_type == "stake_add" else "🔴 减少质押"
+        direction = "买入 / 加仓" if action_type == "stake_add" else "卖出 / 减仓"
+        signal = "TaoStats 加仓" if action_type == "stake_add" else "TaoStats 减仓"
         lines = [
-            "<b>🔴 减少质押</b>",
+            f"<b>{title}</b>",
             "状态: <b>成功</b>",
-            "调用: <code>TaoStats.undelegate</code>",
+            f"调用: <code>TaoStats.{ 'delegate' if action_type == 'stake_add' else 'undelegate' }</code>",
             f"子网: <b>{f'子网 {netuid}' if netuid is not None else '未知子网'}</b>",
-            "方向: <b>卖出 / 减仓</b>",
-            "信号: <b>TaoStats 减仓</b>",
+            f"方向: <b>{direction}</b>",
+            f"信号: <b>{signal}</b>",
             f"区块: <code>{block_number}</code>",
             f"Extrinsic: <code>{extrinsic_index}</code>",
             f"签名者: <code>{signer_address or '-'}</code>",
@@ -688,6 +696,7 @@ class SubtensorMonitor:
         from_address = self._pick_first_address(
             row.get("coldkey"),
             row.get("coldkey_ss58"),
+            row.get("nominator"),
             row.get("delegator"),
             row.get("account"),
             row.get("owner"),
@@ -697,6 +706,7 @@ class SubtensorMonitor:
             row.get("hotkey_ss58"),
             row.get("delegate"),
             row.get("validator"),
+            row.get("delegate_name"),
         )
         if from_address or to_address:
             return from_address, to_address
@@ -705,6 +715,14 @@ class SubtensorMonitor:
         if len(involved_addresses) == 1:
             return involved_addresses[0], None
         return None, None
+
+    def _taostats_row_action_type(self, row: dict[str, Any]) -> str:
+        action = str(row.get("action") or "").strip().upper()
+        if action == "DELEGATE":
+            return "stake_add"
+        if action == "UNDELEGATE":
+            return "stake_remove"
+        return "generic_call"
 
     def _extract_taostats_tao_amount(self, payload: Any) -> float:
         # TaoStats 返回字段可能随接口版本变化，优先读取明确带 TAO/rao 语义且不含 alpha 的金额字段。
