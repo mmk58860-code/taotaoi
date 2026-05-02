@@ -253,7 +253,7 @@ class SubtensorMonitor:
                 )
                 for row in menu_rows
             }
-            start_block = state.last_scanned_block + 1
+            start_block = state.last_scanned_block + 1 if state.last_scanned_block > 0 else 0
             state.monitor_status = "running"
             state.last_error = None
             state.updated_at = datetime.utcnow()
@@ -266,8 +266,17 @@ class SubtensorMonitor:
             logger.info("免费链头读取失败，无法触发 TaoStats 主扫描 error=%s", exc)
             return 0
 
+        lookback_start = max(1, latest_block - int(typed_settings["taostats_lookback_blocks"]))
         if start_block <= 0:
-            start_block = max(1, latest_block - int(typed_settings["taostats_lookback_blocks"]))
+            start_block = lookback_start
+        elif start_block < lookback_start:
+            start_block = lookback_start
+        logger.info(
+            "TaoStats 主扫描区间 start=%s latest=%s lookback=%s",
+            start_block,
+            latest_block,
+            int(typed_settings["taostats_lookback_blocks"]),
+        )
 
         if start_block > latest_block:
             with session_scope() as session:
