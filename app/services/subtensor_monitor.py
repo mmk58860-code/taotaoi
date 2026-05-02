@@ -704,6 +704,10 @@ class SubtensorMonitor:
         normalized = self._normalize_value(payload)
         if not isinstance(normalized, dict):
             return 0.0
+        # TaoStats delegation/v1 的 amount 字段就是实际成交的 TAO，单位为 Rao。
+        amount_raw = self._to_int(normalized.get("amount"))
+        if amount_raw is not None and amount_raw > 0:
+            return round(amount_raw / RAO_PER_TAO, 9)
         for key in ("amount_tao", "tao_amount", "tao", "received_tao", "tao_received"):
             value = normalized.get(key)
             if isinstance(value, (int, float)) and value > 0:
