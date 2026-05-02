@@ -464,13 +464,21 @@ class SubtensorMonitor:
         }
         delegation_count = len(delegation_rows)
         exchange_count = len(exchange_rows)
+        delegation_supported = 0
+        delegation_positive = 0
+        delegation_matched = 0
+        exchange_supported = 0
+        exchange_positive = 0
+        exchange_matched = 0
         for row_index, row in enumerate(delegation_rows):
             action_type = self._taostats_row_action_type(row)
             if action_type not in {"stake_add", "stake_remove"}:
                 continue
+            delegation_supported += 1
             amount_tao = self._extract_taostats_tao_amount(row)
             if amount_tao <= 0:
                 continue
+            delegation_positive += 1
             involved_addresses = self._collect_addresses(row)
             extrinsic_index = self._taostats_extrinsic_index(row, row_index)
             event_index = extrinsic_index * 1000 + row_index
@@ -482,6 +490,7 @@ class SubtensorMonitor:
                     matched_menu_ids.add(menu_id)
             if not matched_menu_ids:
                 continue
+            delegation_matched += 1
 
             primary_from, primary_to = self._taostats_primary_route(row, involved_addresses)
             signer_address = self._pick_first_address(
@@ -567,9 +576,11 @@ class SubtensorMonitor:
             action_type = self._taostats_exchange_action_type(row)
             if action_type not in {"stake_swap", "swap_call"}:
                 continue
+            exchange_supported += 1
             amount_tao = self._extract_taostats_exchange_tao_amount(row)
             if amount_tao <= 0:
                 continue
+            exchange_positive += 1
             involved_addresses = self._collect_addresses(row)
             extrinsic_index = self._taostats_extrinsic_index(row, row_index)
             event_index = extrinsic_index * 1000 + row_index
@@ -581,6 +592,7 @@ class SubtensorMonitor:
                     matched_menu_ids.add(menu_id)
             if not matched_menu_ids:
                 continue
+            exchange_matched += 1
 
             primary_from, primary_to = self._taostats_primary_route(row, involved_addresses)
             signer_address = self._pick_first_address(
@@ -669,6 +681,16 @@ class SubtensorMonitor:
                 len(actions),
                 len(alert_profiles),
                 len(watch_map),
+            )
+            logger.info(
+                "TAOSTATS_FILTERS block=%s delegation_supported=%s delegation_positive=%s delegation_matched=%s exchange_supported=%s exchange_positive=%s exchange_matched=%s",
+                block_number,
+                delegation_supported,
+                delegation_positive,
+                delegation_matched,
+                exchange_supported,
+                exchange_positive,
+                exchange_matched,
             )
         return actions
 
