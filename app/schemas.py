@@ -15,6 +15,16 @@ class SystemSettingsUpdate(BaseModel):
     network_name: str
     poll_interval_seconds: int = Field(ge=1, le=120)
     finality_lag_blocks: int = Field(ge=0, le=20)
+    taostats_enabled: bool = False
+    taostats_api_key: str = ""
+    taostats_api_keys: str = ""
+    taostats_amount_mode: str = Field(pattern="^(fallback|primary|only)$")
+    taostats_source_mode: str = Field(pattern="^(chain|only)$")
+    taostats_poll_interval_seconds: int = Field(ge=1, le=60)
+    taostats_lookback_blocks: int = Field(ge=1, le=500)
+    taostats_request_interval_seconds: float = Field(ge=0, le=10)
+    taostats_rate_limit_cooldown_seconds: int = Field(ge=1, le=3600)
+    taostats_retry_cooldown_seconds: int = Field(ge=1, le=3600)
 
 
 # 每个账号保存自己通知配置时的表单结构。

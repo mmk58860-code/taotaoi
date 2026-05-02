@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 class TaoStatsClient:
     # TaoStats 只在链上事件拿不到真实 TAO 时作为补全来源，避免浪费免费额度。
     BASE_URL = "https://api.taostats.io/api/delegation/v1"
+    BLOCK_URL = "https://api.taostats.io/api/block/v1"
+    LIVE_HEAD_URL = "https://api.taostats.io/api/v1/live/blocks/head"
     _last_request_at = 0.0
     _key_cooldowns: dict[str, float] = {}
     _next_key_index = 0
@@ -65,6 +67,26 @@ class TaoStatsClient:
         self._block_cache[int(block_number)] = rows
         return self._filter_rows(rows, block_number, extrinsic_index)
 
+    def fetch_latest_block_number(self) -> int:
+        if not self.api_keys:
+            return 0
+        for url, params in (
+            (self.LIVE_HEAD_URL, {}),
+            (self.BLOCK_URL, {"limit": 1, "page": 1}),
+        ):
+            try:
+                with httpx.Client(timeout=self.timeout_seconds) as client:
+                    response = self._request_with_key_pool(client, params, 0, url=url)
+                    if response is None:
+                        continue
+                    response.raise_for_status()
+                    block_number = self._extract_max_block_number(response.json())
+                    if block_number > 0:
+                        return block_number
+            except Exception as exc:
+                logger.info("TaoStats 最新区块查询失败 url=%s error=%s", url, exc)
+        return 0
+
     def _wait_for_rate_limit(self) -> None:
         now = time.monotonic()
         wait_seconds = self.request_interval_seconds - (now - type(self)._last_request_at)
@@ -77,7 +99,10 @@ class TaoStatsClient:
         client: httpx.Client,
         params: dict[str, Any],
         block_number: int,
+        *,
+        url: str | None = None,
     ) -> httpx.Response | None:
+        request_url = url or self.BASE_URL
         tried = 0
         while tried < len(self.api_keys):
             key = self._next_available_key()
@@ -86,10 +111,10 @@ class TaoStatsClient:
                 return None
             tried += 1
             self._wait_for_rate_limit()
-            response = client.get(self.BASE_URL, params=params, headers=self._auth_headers(key))
+            response = client.get(request_url, params=params, headers=self._auth_headers(key))
             if response.status_code in {401, 403}:
                 self._wait_for_rate_limit()
-                response = client.get(self.BASE_URL, params=params, headers=self._auth_headers(key, use_bearer=True))
+                response = client.get(request_url, params=params, headers=self._auth_headers(key, use_bearer=True))
             if response.status_code == 429:
                 type(self)._key_cooldowns[key] = time.monotonic() + self.rate_limit_cooldown_seconds
                 logger.info(
@@ -161,6 +186,38 @@ class TaoStatsClient:
                 if nested:
                     return nested
         return []
+
+    def _extract_max_block_number(self, payload: Any) -> int:
+        numbers: list[int] = []
+
+        def walk(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    key_text = str(key).lower()
+                    if key_text in {"block_number", "blocknumber", "number", "height"}:
+                        parsed = self._to_int(item)
+                        if parsed is not None and parsed > 0:
+                            numbers.append(parsed)
+                    walk(item)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+
+        walk(payload)
+        return max(numbers) if numbers else 0
+
+    def _to_int(self, value: Any) -> int | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            digits = value.replace(",", "").replace("_", "")
+            if digits.isdigit():
+                return int(digits)
+        return None
 
     def _row_matches_extrinsic(self, row: dict[str, Any], block_number: int, extrinsic_index: int) -> bool:
         extrinsic_id = str(row.get("extrinsic_id") or row.get("extrinsicId") or "")

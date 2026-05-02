@@ -192,7 +192,10 @@ class SubtensorMonitor:
         # 后台常驻循环：优先订阅新块头，订阅失败时再用短间隔轮询兜底。
         while not self._stop_event.is_set():
             try:
-                await self._run_new_head_subscription()
+                if self._current_taostats_source_mode() == "only":
+                    await self._run_taostats_source_loop()
+                else:
+                    await self._run_new_head_subscription()
             except Exception as exc:
                 logger.exception("monitor loop failed")
                 self._close_substrate()
@@ -203,6 +206,96 @@ class SubtensorMonitor:
                     state.updated_at = datetime.utcnow()
                 await asyncio.sleep(10)
                 continue
+
+    def _current_taostats_source_mode(self) -> str:
+        with session_scope() as session:
+            raw = get_system_runtime_settings(session)
+        typed = typed_system_runtime_settings(raw)
+        return self._taostats_source_mode(str(typed["taostats_source_mode"]))
+
+    async def _run_taostats_source_loop(self) -> None:
+        # TaoStats 主数据源模式：不解码 Subtensor 区块，只按 TaoStats 返回的 undelegate 数据入库。
+        while not self._stop_event.is_set() and not self._wakeup_event.is_set():
+            completed = await asyncio.to_thread(self._scan_taostats_source_once)
+            with session_scope() as session:
+                raw = get_system_runtime_settings(session)
+            typed = typed_system_runtime_settings(raw)
+            wait_seconds = max(1, int(typed["taostats_poll_interval_seconds"]))
+            if completed:
+                wait_seconds = min(wait_seconds, 3)
+            try:
+                await asyncio.wait_for(self._wakeup_event.wait(), timeout=wait_seconds)
+            except asyncio.TimeoutError:
+                pass
+        self._wakeup_event.clear()
+
+    def _scan_taostats_source_once(self) -> int:
+        with session_scope() as session:
+            raw_settings = get_system_runtime_settings(session)
+            typed_settings = typed_system_runtime_settings(raw_settings)
+            if not bool(typed_settings["taostats_enabled"]) or not (
+                str(typed_settings["taostats_api_key"]) or str(typed_settings["taostats_api_keys"])
+            ):
+                return 0
+            state = ensure_state(session)
+            menu_rows = session.scalars(select(MonitorMenu).order_by(MonitorMenu.sort_order.asc(), MonitorMenu.id.asc())).all()
+            wallet_rows = session.scalars(select(WalletWatch).where(WalletWatch.enabled.is_(True))).all()
+            watch_map = self._build_watch_map(wallet_rows)
+            profile_map = {
+                row.id: NotificationProfile(
+                    monitor_menu_id=row.id,
+                    owner_user_id=row.owner_user_id,
+                    menu_kind=row.menu_kind,
+                    menu_name=row.name,
+                    threshold_tao=float(row.large_transfer_threshold_tao),
+                    telegram_bot_token=row.telegram_bot_token,
+                    telegram_chat_id=row.telegram_chat_id,
+                )
+                for row in menu_rows
+            }
+            start_block = state.last_scanned_block + 1
+            state.monitor_status = "running"
+            state.last_error = None
+            state.updated_at = datetime.utcnow()
+
+        client = self._build_taostats_client(typed_settings)
+        try:
+            substrate = self._get_substrate(str(typed_settings["subtensor_ws_url"]))
+            latest_block = self._get_latest_head_block(substrate)
+        except Exception as exc:
+            logger.info("免费链头读取失败，无法触发 TaoStats 主扫描 error=%s", exc)
+            return 0
+
+        if start_block <= 0:
+            start_block = max(1, latest_block - int(typed_settings["taostats_lookback_blocks"]))
+
+        if start_block > latest_block:
+            with session_scope() as session:
+                state = ensure_state(session)
+                state.last_seen_head = latest_block
+                state.monitor_status = "running"
+                state.updated_at = datetime.utcnow()
+            return 0
+
+        completed = 0
+        for block_number in range(start_block, latest_block + 1):
+            rows = client.fetch_stake_events(block_number=block_number, extrinsic_index=None, netuid=None)
+            actions = self._build_actions_from_taostats_rows(
+                rows=rows,
+                block_number=block_number,
+                watch_map=watch_map,
+                profile_map=profile_map,
+            )
+            if actions:
+                asyncio.run(self._persist_and_notify(actions))
+            completed += len(actions)
+            with session_scope() as session:
+                state = ensure_state(session)
+                state.last_scanned_block = block_number
+                state.last_seen_head = latest_block
+                state.monitor_status = "running"
+                state.updated_at = datetime.utcnow()
+        return completed
 
     async def _run_amount_completion(self) -> None:
         # 减仓成交额补全器独立运行；查不到不影响主监听和 TG 推送。
@@ -219,8 +312,13 @@ class SubtensorMonitor:
                 pass
 
     def _complete_unresolved_stake_amounts_sync(self, limit: int = 6) -> int:
-        settings = get_settings()
-        taostats_mode = self._taostats_amount_mode(settings.taostats_amount_mode)
+        with session_scope() as session:
+            raw_settings = get_system_runtime_settings(session)
+        typed_settings = typed_system_runtime_settings(raw_settings)
+        if self._taostats_source_mode(str(typed_settings["taostats_source_mode"])) == "only":
+            return 0
+
+        taostats_mode = self._taostats_amount_mode(str(typed_settings["taostats_amount_mode"]))
         with session_scope() as session:
             raw_settings = get_system_runtime_settings(session)
             typed = typed_system_runtime_settings(raw_settings)
@@ -244,7 +342,7 @@ class SubtensorMonitor:
             return 0
 
         substrate = SubstrateInterface(url=str(typed["subtensor_ws_url"]))
-        taostats_client = self._build_taostats_client(settings)
+        taostats_client = self._build_taostats_client(typed_settings)
         completed_count = 0
         attempted_taostats = 0
         try:
@@ -254,7 +352,7 @@ class SubtensorMonitor:
                 taostats_estimate = None
                 price_estimate = None
                 if taostats_mode in {"primary", "only"}:
-                    if not self._taostats_retry_due(row, settings.taostats_retry_cooldown_seconds):
+                    if not self._taostats_retry_due(row, int(typed_settings["taostats_retry_cooldown_seconds"])):
                         continue
                     if attempted_taostats >= 3:
                         logger.info("本轮 TaoStats 免费额度保护：已尝试 3 条，暂停到下一轮")
@@ -270,7 +368,7 @@ class SubtensorMonitor:
                     amount_tao <= 0
                     and taostats_estimate is None
                     and taostats_mode == "fallback"
-                    and self._taostats_retry_due(row, settings.taostats_retry_cooldown_seconds)
+                    and self._taostats_retry_due(row, int(typed_settings["taostats_retry_cooldown_seconds"]))
                 ):
                     if attempted_taostats >= 3:
                         logger.info("本轮 TaoStats 免费额度保护：已尝试 3 条，暂停到下一轮")
@@ -322,20 +420,180 @@ class SubtensorMonitor:
         return round(max(candidates) / RAO_PER_TAO, 9)
 
     def _build_taostats_client(self, settings) -> TaoStatsClient:
+        if isinstance(settings, dict):
+            api_key = str(settings.get("taostats_api_key", ""))
+            api_keys = str(settings.get("taostats_api_keys", ""))
+            request_interval_seconds = float(settings.get("taostats_request_interval_seconds", 1))
+            rate_limit_cooldown_seconds = int(settings.get("taostats_rate_limit_cooldown_seconds", 15))
+        else:
+            api_key = settings.taostats_api_key
+            api_keys = settings.taostats_api_keys
+            request_interval_seconds = settings.taostats_request_interval_seconds
+            rate_limit_cooldown_seconds = settings.taostats_rate_limit_cooldown_seconds
         return TaoStatsClient(
-            settings.taostats_api_key,
-            api_keys=settings.taostats_api_keys,
-            request_interval_seconds=settings.taostats_request_interval_seconds,
-            rate_limit_cooldown_seconds=settings.taostats_rate_limit_cooldown_seconds,
+            api_key,
+            api_keys=api_keys,
+            request_interval_seconds=request_interval_seconds,
+            rate_limit_cooldown_seconds=rate_limit_cooldown_seconds,
         )
+
+    def _build_actions_from_taostats_rows(
+        self,
+        rows: list[dict[str, Any]],
+        block_number: int,
+        watch_map: dict[str, dict[int, list[str]]],
+        profile_map: dict[int, NotificationProfile],
+    ) -> list[ActionRecord]:
+        actions: list[ActionRecord] = []
+        alert_profiles = {
+            menu_id: profile
+            for menu_id, profile in profile_map.items()
+            if profile.menu_kind == BUILTIN_ALERT_KIND and profile.threshold_tao > 0
+        }
+        for row_index, row in enumerate(rows):
+            amount_tao = self._extract_taostats_tao_amount(row)
+            if amount_tao <= 0:
+                continue
+            involved_addresses = self._collect_addresses(row)
+            extrinsic_index = self._taostats_extrinsic_index(row, row_index)
+            event_index = extrinsic_index * 1000 + row_index
+            matched_menu_ids: set[int] = set()
+            for address in involved_addresses:
+                matched_menu_ids.update(watch_map.get(address, {}).keys())
+            for menu_id, profile in alert_profiles.items():
+                if amount_tao >= profile.threshold_tao:
+                    matched_menu_ids.add(menu_id)
+            if not matched_menu_ids:
+                continue
+
+            primary_from, primary_to = self._taostats_primary_route(row, involved_addresses)
+            signer_address = self._pick_first_address(
+                row.get("coldkey"),
+                row.get("coldkey_ss58"),
+                row.get("account"),
+                row.get("address"),
+                row.get("delegator"),
+                row.get("owner"),
+                primary_from,
+            )
+            netuid = self._taostats_netuid(row)
+            raw_payload = {
+                "source": "taostats",
+                "tao_completion_status": "completed",
+                "tao_completion_source": "taostats",
+                "action_type": "stake_remove",
+                "taostats_result": row,
+                "involved_addresses": involved_addresses,
+                "taostats_netuid": netuid,
+            }
+            for monitor_menu_id in matched_menu_ids:
+                profile = profile_map.get(monitor_menu_id)
+                if profile is None:
+                    continue
+                matched_aliases = self._collect_aliases(
+                    watch_map=watch_map,
+                    monitor_menu_id=monitor_menu_id,
+                    involved_addresses=involved_addresses,
+                )
+                watched = bool(matched_aliases)
+                above_threshold = profile.menu_kind == BUILTIN_ALERT_KIND and amount_tao >= profile.threshold_tao
+                message = self._build_taostats_message(
+                    amount_tao=amount_tao,
+                    block_number=block_number,
+                    extrinsic_index=extrinsic_index,
+                    netuid=netuid,
+                    signer_address=signer_address,
+                    primary_from=primary_from,
+                    primary_to=primary_to,
+                    involved_addresses=involved_addresses,
+                    matched_aliases=matched_aliases,
+                    watched=watched,
+                    above_threshold=above_threshold,
+                    threshold_tao=profile.threshold_tao,
+                )
+                should_notify = self._should_notify_action(
+                    profile=profile,
+                    action_type="stake_remove",
+                    watched=watched,
+                    above_threshold=above_threshold,
+                )
+                actions.append(
+                    ActionRecord(
+                        monitor_menu_id=monitor_menu_id,
+                        owner_user_id=profile.owner_user_id,
+                        menu_name=profile.menu_name,
+                        block_number=block_number,
+                        event_index=event_index,
+                        extrinsic_index=extrinsic_index,
+                        pallet="TaoStats",
+                        event_name="undelegate",
+                        action_type="stake_remove",
+                        call_name="taostats_undelegate",
+                        amount_tao=amount_tao,
+                        from_address=primary_from,
+                        to_address=primary_to,
+                        signer_address=signer_address,
+                        extrinsic_hash=str(row.get("extrinsic_hash") or row.get("hash") or "") or None,
+                        success=True,
+                        failure_reason=None,
+                        involved_addresses=involved_addresses,
+                        matched_aliases=matched_aliases,
+                        message=message,
+                        raw_payload=json.dumps(raw_payload, ensure_ascii=False, default=str),
+                        should_notify=should_notify,
+                        telegram_bot_token=profile.telegram_bot_token,
+                        telegram_chat_id=profile.telegram_chat_id,
+                    )
+                )
+        return actions
+
+    def _build_taostats_message(
+        self,
+        amount_tao: float,
+        block_number: int,
+        extrinsic_index: int,
+        netuid: int | None,
+        signer_address: str | None,
+        primary_from: str | None,
+        primary_to: str | None,
+        involved_addresses: list[str],
+        matched_aliases: list[str],
+        watched: bool,
+        above_threshold: bool,
+        threshold_tao: float,
+    ) -> str:
+        tags: list[str] = []
+        if watched:
+            tags.append(f"监控钱包: {', '.join(matched_aliases)}")
+        if above_threshold:
+            tags.append(f"大额阈值: >= {threshold_tao} TAO")
+        lines = [
+            "<b>🔴 减少质押</b>",
+            "状态: <b>成功</b>",
+            "调用: <code>TaoStats.undelegate</code>",
+            f"子网: <b>{f'子网 {netuid}' if netuid is not None else '未知子网'}</b>",
+            "方向: <b>卖出 / 减仓</b>",
+            "信号: <b>TaoStats 减仓</b>",
+            f"区块: <code>{block_number}</code>",
+            f"Extrinsic: <code>{extrinsic_index}</code>",
+            f"签名者: <code>{signer_address or '-'}</code>",
+            f"金额估值: <b>{amount_tao:.6f} TAO（TaoStats）</b>",
+            f"主路径: <code>{primary_from or '-'} -> {primary_to or '-'}</code>",
+            f"关联地址: <code>{', '.join(involved_addresses[:8]) if involved_addresses else '-'}</code>",
+        ]
+        if tags:
+            lines.append(f"命中原因: {', '.join(tags)}")
+        return "\n".join(lines)
 
     def _estimate_taostats_amount_tao(
         self,
         row: ChainEvent,
         client: TaoStatsClient | None = None,
     ) -> TaoStatsEstimate | None:
-        settings = get_settings()
-        if not settings.taostats_enabled or not (settings.taostats_api_key or settings.taostats_api_keys):
+        with session_scope() as session:
+            raw = get_system_runtime_settings(session)
+        typed = typed_system_runtime_settings(raw)
+        if not bool(typed["taostats_enabled"]) or not (str(typed["taostats_api_key"]) or str(typed["taostats_api_keys"])):
             return None
         if row.action_type != "stake_remove":
             return None
@@ -347,7 +605,7 @@ class SubtensorMonitor:
         netuid = subnet_ids[0] if subnet_ids else None
 
         if client is None:
-            client = self._build_taostats_client(settings)
+            client = self._build_taostats_client(typed)
         rows = client.fetch_stake_events(
             block_number=int(row.block_number),
             extrinsic_index=int(row.extrinsic_index or 0),
@@ -381,6 +639,53 @@ class SubtensorMonitor:
         if mode in {"fallback", "primary", "only"}:
             return mode
         return "fallback"
+
+    def _taostats_source_mode(self, value: str) -> str:
+        mode = str(value or "chain").strip().lower()
+        if mode in {"chain", "only"}:
+            return mode
+        return "chain"
+
+    def _taostats_extrinsic_index(self, row: dict[str, Any], fallback: int) -> int:
+        for key in ("extrinsic_index", "extrinsic_idx", "extrinsicIndex"):
+            parsed = self._to_int(row.get(key))
+            if parsed is not None:
+                return parsed
+        extrinsic_id = str(row.get("extrinsic_id") or row.get("extrinsicId") or "")
+        match = re.search(r"[-:](\d+)(?:[-:]|$)", extrinsic_id)
+        if match:
+            return int(match.group(1))
+        return int(fallback)
+
+    def _taostats_netuid(self, row: dict[str, Any]) -> int | None:
+        for key in ("netuid", "net_uid", "subnet", "subnet_id"):
+            parsed = self._to_int(row.get(key))
+            if parsed is not None and 0 <= parsed <= 10_000:
+                return parsed
+        subnet_ids = self._extract_subnet_ids(row)
+        return subnet_ids[0] if subnet_ids else None
+
+    def _taostats_primary_route(self, row: dict[str, Any], involved_addresses: list[str]) -> tuple[str | None, str | None]:
+        from_address = self._pick_first_address(
+            row.get("coldkey"),
+            row.get("coldkey_ss58"),
+            row.get("delegator"),
+            row.get("account"),
+            row.get("owner"),
+        )
+        to_address = self._pick_first_address(
+            row.get("hotkey"),
+            row.get("hotkey_ss58"),
+            row.get("delegate"),
+            row.get("validator"),
+        )
+        if from_address or to_address:
+            return from_address, to_address
+        if len(involved_addresses) >= 2:
+            return involved_addresses[0], involved_addresses[1]
+        if len(involved_addresses) == 1:
+            return involved_addresses[0], None
+        return None, None
 
     def _extract_taostats_tao_amount(self, payload: Any) -> float:
         # TaoStats 返回字段可能随接口版本变化，优先读取明确带 TAO/rao 语义且不含 alpha 的金额字段。
@@ -776,6 +1081,9 @@ class SubtensorMonitor:
         profile_map: dict[int, NotificationProfile],
     ) -> list[ActionRecord]:
         # 每个区块都读取全部 extrinsic 和 event，再展开成统一动作。
+        with session_scope() as session:
+            raw_runtime = get_system_runtime_settings(session)
+        typed_runtime = typed_system_runtime_settings(raw_runtime)
         block_hash = substrate.get_block_hash(block_number)
         block = substrate.get_block(block_hash=block_hash)
         events = substrate.get_events(block_hash=block_hash)
@@ -816,8 +1124,7 @@ class SubtensorMonitor:
                     continue
                 if not success and self._is_trade_action(action_type):
                     continue
-                settings = get_settings()
-                taostats_mode = self._taostats_amount_mode(settings.taostats_amount_mode)
+                taostats_mode = self._taostats_amount_mode(str(typed_runtime["taostats_amount_mode"]))
                 if taostats_mode == "only" and action_type == "stake_remove":
                     amount_tao = 0.0
                 price_estimate = None

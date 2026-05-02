@@ -160,6 +160,53 @@
                 <span>最终确认延后块数</span>
                 <input name="finality_lag_blocks" type="number" min="0" max="20" value="{{ system_settings['finality_lag_blocks'] }}" required>
               </label>
+              <label class="checkbox-row">
+                <span>启用 TaoStats</span>
+                <input name="taostats_enabled" type="checkbox" {% if system_settings.get('taostats_enabled') in ['true', 'True', true] %}checked{% endif %}>
+              </label>
+              <label>
+                <span>TaoStats 主 API</span>
+                <input name="taostats_api_key" value="{{ system_settings.get('taostats_api_key', '') }}">
+              </label>
+              <label>
+                <span>TaoStats 备用 API 池</span>
+                <textarea name="taostats_api_keys" rows="4" placeholder="key1,key2,key3&#10;也支持换行">{{ system_settings.get('taostats_api_keys', '') }}</textarea>
+              </label>
+              <label>
+                <span>TaoStats 金额模式</span>
+                <select name="taostats_amount_mode">
+                  <option value="fallback" {% if system_settings.get('taostats_amount_mode') == 'fallback' %}selected{% endif %}>fallback</option>
+                  <option value="primary" {% if system_settings.get('taostats_amount_mode') == 'primary' %}selected{% endif %}>primary</option>
+                  <option value="only" {% if system_settings.get('taostats_amount_mode') == 'only' %}selected{% endif %}>only</option>
+                </select>
+              </label>
+              <label>
+                <span>TaoStats 数据源模式</span>
+                <select name="taostats_source_mode">
+                  <option value="chain" {% if system_settings.get('taostats_source_mode') == 'chain' %}selected{% endif %}>链节点扫块</option>
+                  <option value="only" {% if system_settings.get('taostats_source_mode') == 'only' %}selected{% endif %}>只用 TaoStats 扫数据</option>
+                </select>
+              </label>
+              <label>
+                <span>TaoStats 扫描间隔（秒）</span>
+                <input name="taostats_poll_interval_seconds" type="number" min="1" max="60" value="{{ system_settings.get('taostats_poll_interval_seconds', 3) }}" required>
+              </label>
+              <label>
+                <span>TaoStats 首次回看块数</span>
+                <input name="taostats_lookback_blocks" type="number" min="1" max="500" value="{{ system_settings.get('taostats_lookback_blocks', 20) }}" required>
+              </label>
+              <label>
+                <span>TaoStats 请求间隔（秒）</span>
+                <input name="taostats_request_interval_seconds" type="number" min="0" max="10" step="0.1" value="{{ system_settings.get('taostats_request_interval_seconds', 1) }}" required>
+              </label>
+              <label>
+                <span>TaoStats 429 冷却（秒）</span>
+                <input name="taostats_rate_limit_cooldown_seconds" type="number" min="1" max="3600" value="{{ system_settings.get('taostats_rate_limit_cooldown_seconds', 15) }}" required>
+              </label>
+              <label>
+                <span>TaoStats 重试冷却（秒）</span>
+                <input name="taostats_retry_cooldown_seconds" type="number" min="1" max="3600" value="{{ system_settings.get('taostats_retry_cooldown_seconds', 2) }}" required>
+              </label>
               <div class="form-actions">
                 <button class="action" type="submit">保存系统设置</button>
               </div>

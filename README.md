@@ -110,12 +110,16 @@ TAOSTATS_ENABLED=true
 TAOSTATS_API_KEY=你的 TaoStats API Key
 TAOSTATS_API_KEYS=备用key1,备用key2
 TAOSTATS_AMOUNT_MODE=only
+TAOSTATS_SOURCE_MODE=only
+TAOSTATS_POLL_INTERVAL_SECONDS=3
+TAOSTATS_LOOKBACK_BLOCKS=20
 TAOSTATS_REQUEST_INTERVAL_SECONDS=1
 TAOSTATS_RATE_LIMIT_COOLDOWN_SECONDS=15
 TAOSTATS_RETRY_COOLDOWN_SECONDS=2
 ```
 
 `TAOSTATS_AMOUNT_MODE=only` 表示减仓金额只看 TaoStats，适合测试免费额度和数据准确性；如果 TaoStats 未返回，页面会明确显示“等待 TaoStats”或“TaoStats未返回”，不会再混入子网价格或限价估算。
+`TAOSTATS_SOURCE_MODE=only` 表示交易数据也只从 TaoStats 扫描，不再逐块解码 Subtensor extrinsic。
 免费额度容易触发 `429 Too Many Requests` 时，可以把 `TAOSTATS_REQUEST_INTERVAL_SECONDS` 和 `TAOSTATS_RETRY_COOLDOWN_SECONDS` 调大。
 如果你有多个合法 TaoStats API Key，可以把备用 key 放到 `TAOSTATS_API_KEYS`，某个 key 触发 429 时会自动切换下一个 key，并让触发 429 的 key 冷却一段时间。
 

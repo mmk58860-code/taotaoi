@@ -13,6 +13,16 @@ SYSTEM_SETTING_KEYS = (
     "network_name",
     "poll_interval_seconds",
     "finality_lag_blocks",
+    "taostats_enabled",
+    "taostats_api_key",
+    "taostats_api_keys",
+    "taostats_amount_mode",
+    "taostats_source_mode",
+    "taostats_poll_interval_seconds",
+    "taostats_lookback_blocks",
+    "taostats_request_interval_seconds",
+    "taostats_rate_limit_cooldown_seconds",
+    "taostats_retry_cooldown_seconds",
 )
 
 
@@ -47,6 +57,16 @@ def get_system_default_settings() -> dict[str, str | int]:
         "network_name": settings.network_name,
         "poll_interval_seconds": settings.poll_interval_seconds,
         "finality_lag_blocks": settings.finality_lag_blocks,
+        "taostats_enabled": str(settings.taostats_enabled).lower(),
+        "taostats_api_key": settings.taostats_api_key,
+        "taostats_api_keys": settings.taostats_api_keys,
+        "taostats_amount_mode": settings.taostats_amount_mode,
+        "taostats_source_mode": settings.taostats_source_mode,
+        "taostats_poll_interval_seconds": settings.taostats_poll_interval_seconds,
+        "taostats_lookback_blocks": settings.taostats_lookback_blocks,
+        "taostats_request_interval_seconds": settings.taostats_request_interval_seconds,
+        "taostats_rate_limit_cooldown_seconds": settings.taostats_rate_limit_cooldown_seconds,
+        "taostats_retry_cooldown_seconds": settings.taostats_retry_cooldown_seconds,
     }
 
 
@@ -128,10 +148,20 @@ def migrate_legacy_user_settings(session: Session, owner_user_id: int) -> None:
     session.flush()
 
 
-def typed_system_runtime_settings(raw: Mapping[str, str]) -> dict[str, str | int]:
+def typed_system_runtime_settings(raw: Mapping[str, str]) -> dict[str, str | int | float | bool]:
     return {
         "subtensor_ws_url": raw.get("subtensor_ws_url", ""),
         "network_name": raw.get("network_name", "finney"),
         "poll_interval_seconds": int(raw.get("poll_interval_seconds", "2")),
         "finality_lag_blocks": int(raw.get("finality_lag_blocks", "0")),
+        "taostats_enabled": str(raw.get("taostats_enabled", "false")).strip().lower() == "true",
+        "taostats_api_key": raw.get("taostats_api_key", ""),
+        "taostats_api_keys": raw.get("taostats_api_keys", ""),
+        "taostats_amount_mode": raw.get("taostats_amount_mode", "fallback"),
+        "taostats_source_mode": raw.get("taostats_source_mode", "chain"),
+        "taostats_poll_interval_seconds": int(raw.get("taostats_poll_interval_seconds", "3")),
+        "taostats_lookback_blocks": int(raw.get("taostats_lookback_blocks", "20")),
+        "taostats_request_interval_seconds": float(raw.get("taostats_request_interval_seconds", "1")),
+        "taostats_rate_limit_cooldown_seconds": int(raw.get("taostats_rate_limit_cooldown_seconds", "15")),
+        "taostats_retry_cooldown_seconds": int(raw.get("taostats_retry_cooldown_seconds", "2")),
     }

@@ -1363,6 +1363,16 @@ async def save_system_settings(request: Request, next_panel: str = Form("")) -> 
         network_name=str(form.get("network_name", "")).strip(),
         poll_interval_seconds=int(form.get("poll_interval_seconds", 2)),
         finality_lag_blocks=int(form.get("finality_lag_blocks", 0)),
+        taostats_enabled=str(form.get("taostats_enabled", "")).strip().lower() in {"1", "true", "on", "yes"},
+        taostats_api_key=str(form.get("taostats_api_key", "")).strip(),
+        taostats_api_keys=str(form.get("taostats_api_keys", "")).strip(),
+        taostats_amount_mode=str(form.get("taostats_amount_mode", "fallback")).strip(),
+        taostats_source_mode=str(form.get("taostats_source_mode", "chain")).strip(),
+        taostats_poll_interval_seconds=int(form.get("taostats_poll_interval_seconds", 3)),
+        taostats_lookback_blocks=int(form.get("taostats_lookback_blocks", 20)),
+        taostats_request_interval_seconds=float(form.get("taostats_request_interval_seconds", 1)),
+        taostats_rate_limit_cooldown_seconds=int(form.get("taostats_rate_limit_cooldown_seconds", 15)),
+        taostats_retry_cooldown_seconds=int(form.get("taostats_retry_cooldown_seconds", 2)),
     )
 
     with session_scope() as session:
