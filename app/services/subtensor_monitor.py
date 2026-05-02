@@ -288,9 +288,11 @@ class SubtensorMonitor:
 
         completed = 0
         for block_number in range(start_block, latest_block + 1):
-            rows = client.fetch_stake_events(block_number=block_number, extrinsic_index=None, netuid=None, action="all")
+            delegation_rows = client.fetch_stake_events(block_number=block_number, extrinsic_index=None, netuid=None, action="all")
+            exchange_rows = client.fetch_exchange_events(block_number=block_number)
             actions = self._build_actions_from_taostats_rows(
-                rows=rows,
+                delegation_rows=delegation_rows,
+                exchange_rows=exchange_rows,
                 block_number=block_number,
                 watch_map=watch_map,
                 profile_map=profile_map,
@@ -448,7 +450,8 @@ class SubtensorMonitor:
 
     def _build_actions_from_taostats_rows(
         self,
-        rows: list[dict[str, Any]],
+        delegation_rows: list[dict[str, Any]],
+        exchange_rows: list[dict[str, Any]],
         block_number: int,
         watch_map: dict[str, dict[int, list[str]]],
         profile_map: dict[int, NotificationProfile],
@@ -459,8 +462,9 @@ class SubtensorMonitor:
             for menu_id, profile in profile_map.items()
             if profile.menu_kind == BUILTIN_ALERT_KIND and profile.threshold_tao > 0
         }
-        row_count = len(rows)
-        for row_index, row in enumerate(rows):
+        delegation_count = len(delegation_rows)
+        exchange_count = len(exchange_rows)
+        for row_index, row in enumerate(delegation_rows):
             action_type = self._taostats_row_action_type(row)
             if action_type not in {"stake_add", "stake_remove"}:
                 continue
@@ -559,11 +563,109 @@ class SubtensorMonitor:
                         telegram_chat_id=profile.telegram_chat_id,
                     )
                 )
-        if row_count:
+        for row_index, row in enumerate(exchange_rows, start=1000):
+            action_type = self._taostats_exchange_action_type(row)
+            if action_type not in {"stake_swap", "swap_call"}:
+                continue
+            amount_tao = self._extract_taostats_exchange_tao_amount(row)
+            if amount_tao <= 0:
+                continue
+            involved_addresses = self._collect_addresses(row)
+            extrinsic_index = self._taostats_extrinsic_index(row, row_index)
+            event_index = extrinsic_index * 1000 + row_index
+            matched_menu_ids: set[int] = set()
+            for address in involved_addresses:
+                matched_menu_ids.update(watch_map.get(address, {}).keys())
+            for menu_id, profile in alert_profiles.items():
+                if amount_tao >= profile.threshold_tao:
+                    matched_menu_ids.add(menu_id)
+            if not matched_menu_ids:
+                continue
+
+            primary_from, primary_to = self._taostats_primary_route(row, involved_addresses)
+            signer_address = self._pick_first_address(
+                row.get("account"),
+                row.get("owner"),
+                row.get("address"),
+                primary_from,
+            )
+            netuid = self._taostats_netuid(row)
+            raw_payload = {
+                "source": "taostats",
+                "tao_completion_status": "completed",
+                "tao_completion_source": "taostats",
+                "action_type": action_type,
+                "taostats_result": row,
+                "involved_addresses": involved_addresses,
+                "taostats_netuid": netuid,
+            }
+            for monitor_menu_id in matched_menu_ids:
+                profile = profile_map.get(monitor_menu_id)
+                if profile is None:
+                    continue
+                matched_aliases = self._collect_aliases(
+                    watch_map=watch_map,
+                    monitor_menu_id=monitor_menu_id,
+                    involved_addresses=involved_addresses,
+                )
+                watched = bool(matched_aliases)
+                above_threshold = profile.menu_kind == BUILTIN_ALERT_KIND and amount_tao >= profile.threshold_tao
+                message = self._build_taostats_message(
+                    action_type=action_type,
+                    amount_tao=amount_tao,
+                    block_number=block_number,
+                    extrinsic_index=extrinsic_index,
+                    netuid=netuid,
+                    signer_address=signer_address,
+                    primary_from=primary_from,
+                    primary_to=primary_to,
+                    involved_addresses=involved_addresses,
+                    matched_aliases=matched_aliases,
+                    watched=watched,
+                    above_threshold=above_threshold,
+                    threshold_tao=profile.threshold_tao,
+                )
+                should_notify = self._should_notify_action(
+                    profile=profile,
+                    action_type=action_type,
+                    watched=watched,
+                    above_threshold=above_threshold,
+                )
+                actions.append(
+                    ActionRecord(
+                        monitor_menu_id=monitor_menu_id,
+                        owner_user_id=profile.owner_user_id,
+                        menu_name=profile.menu_name,
+                        block_number=block_number,
+                        event_index=event_index,
+                        extrinsic_index=extrinsic_index,
+                        pallet="TaoStats",
+                        event_name=str(row.get("action") or row.get("type") or "exchange").lower(),
+                        action_type=action_type,
+                        call_name=f"taostats_{str(row.get('action') or row.get('type') or 'exchange').lower()}",
+                        amount_tao=amount_tao,
+                        from_address=primary_from,
+                        to_address=primary_to,
+                        signer_address=signer_address,
+                        extrinsic_hash=str(row.get("extrinsic_hash") or row.get("hash") or "") or None,
+                        success=True,
+                        failure_reason=None,
+                        involved_addresses=involved_addresses,
+                        matched_aliases=matched_aliases,
+                        message=message,
+                        raw_payload=json.dumps(raw_payload, ensure_ascii=False, default=str),
+                        should_notify=should_notify,
+                        telegram_bot_token=profile.telegram_bot_token,
+                        telegram_chat_id=profile.telegram_chat_id,
+                    )
+                )
+
+        if delegation_count or exchange_count:
             logger.info(
-                "TAOSTATS_PARSE block=%s rows=%s actions=%s alert_profiles=%s wallets=%s",
+                "TAOSTATS_PARSE block=%s delegation_rows=%s exchange_rows=%s actions=%s alert_profiles=%s wallets=%s",
                 block_number,
-                row_count,
+                delegation_count,
+                exchange_count,
                 len(actions),
                 len(alert_profiles),
                 len(watch_map),
@@ -724,6 +826,12 @@ class SubtensorMonitor:
             return "stake_remove"
         return "generic_call"
 
+    def _taostats_exchange_action_type(self, row: dict[str, Any]) -> str:
+        action = str(row.get("action") or row.get("type") or "").strip().upper()
+        if "SWAP" in action or "EXCHANGE" in action:
+            return "stake_swap"
+        return "generic_call"
+
     def _extract_taostats_tao_amount(self, payload: Any) -> float:
         # TaoStats 返回字段可能随接口版本变化，优先读取明确带 TAO/rao 语义且不含 alpha 的金额字段。
         candidates = self._collect_tao_amount_candidates(payload)
@@ -745,6 +853,33 @@ class SubtensorMonitor:
                     parsed = float(value.replace(",", "").replace("_", ""))
                     if parsed > 0:
                         return round(parsed, 9)
+        return 0.0
+
+    def _extract_taostats_exchange_tao_amount(self, payload: Any) -> float:
+        normalized = self._normalize_value(payload)
+        if not isinstance(normalized, dict):
+            return 0.0
+        for key in (
+            "tao_amount",
+            "amount_tao",
+            "received_tao",
+            "tao_received",
+            "source_tao",
+            "destination_tao",
+            "input_tao",
+            "output_tao",
+        ):
+            value = normalized.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return round(float(value), 9)
+            if isinstance(value, str):
+                with suppress(ValueError):
+                    parsed = float(value.replace(",", "").replace("_", ""))
+                    if parsed > 0:
+                        return round(parsed, 9)
+        amount_raw = self._to_int(normalized.get("amount"))
+        if amount_raw is not None and amount_raw > 0:
+            return round(amount_raw / RAO_PER_TAO, 9)
         return 0.0
 
     def _estimate_subnet_price_tao(

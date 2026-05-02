@@ -14,6 +14,7 @@ class TaoStatsClient:
     # TaoStats 只在链上事件拿不到真实 TAO 时作为补全来源，避免浪费免费额度。
     BASE_URL = "https://api.taostats.io/api/delegation/v1"
     BLOCK_URL = "https://api.taostats.io/api/block/v1"
+    EXCHANGE_URL = "https://api.taostats.io/api/exchange/v1"
     LIVE_HEAD_URL = "https://api.taostats.io/api/v1/live/blocks/head"
     _last_request_at = 0.0
     _key_cooldowns: dict[str, float] = {}
@@ -32,6 +33,7 @@ class TaoStatsClient:
         self.request_interval_seconds = max(0.0, float(request_interval_seconds))
         self.rate_limit_cooldown_seconds = max(5, int(rate_limit_cooldown_seconds))
         self._block_cache: dict[int, list[dict[str, Any]]] = {}
+        self._exchange_cache: list[dict[str, Any]] = []
 
     def fetch_stake_events(
         self,
@@ -67,6 +69,31 @@ class TaoStatsClient:
         rows = self._extract_rows(response.json())
         self._block_cache[int(block_number)] = rows
         return self._filter_rows(rows, block_number, extrinsic_index)
+
+    def fetch_exchange_events(self, *, block_number: int, limit: int = 200, page: int = 1) -> list[dict[str, Any]]:
+        if not self.api_keys:
+            return []
+        if self._exchange_cache:
+            return self._filter_rows_by_block(self._exchange_cache, block_number)
+
+        params: dict[str, Any] = {
+            "limit": int(limit),
+            "page": int(page),
+        }
+
+        try:
+            with httpx.Client(timeout=self.timeout_seconds) as client:
+                response = self._request_with_key_pool(client, params, block_number, url=self.EXCHANGE_URL)
+                if response is None:
+                    return []
+                response.raise_for_status()
+        except Exception as exc:
+            logger.info("TaoStats exchange 查询失败 block=%s error=%s", block_number, exc)
+            return []
+
+        rows = self._extract_rows(response.json())
+        self._exchange_cache = rows
+        return self._filter_rows_by_block(rows, block_number)
 
     def fetch_latest_block_number(self) -> int:
         if not self.api_keys:
@@ -165,6 +192,14 @@ class TaoStatsClient:
         if len(rows) == 1:
             return rows
         return []
+
+    def _filter_rows_by_block(self, rows: list[dict[str, Any]], block_number: int) -> list[dict[str, Any]]:
+        matched: list[dict[str, Any]] = []
+        for row in rows:
+            parsed = self._to_int(row.get("block_number"))
+            if parsed == int(block_number):
+                matched.append(row)
+        return matched
 
     def _auth_headers(self, key: str, *, use_bearer: bool = False) -> dict[str, str]:
         token = f"Bearer {key}" if use_bearer else key
